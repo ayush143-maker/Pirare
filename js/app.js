@@ -3,32 +3,16 @@
 // places a relative-import typo can break the page on a static host.
 // ==========================================================================
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {
-  getAuth, signInAnonymously, onAuthStateChanged,
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {
-  getFirestore, collection, addDoc, deleteDoc, doc,
-  query, orderBy, onSnapshot, serverTimestamp,
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// ---- Firebase config -----------------------------------------------------
-// Not a secret (see README) — real protection comes from the Firestore /
-// Storage rules, not from hiding this object.
-const firebaseConfig = {
-  apiKey: "AIzaSyCQ_V5rHfMDqGeFMTh1Qc8Gd31e98WRrAQ",
-  authDomain: "x7nova-10d48.firebaseapp.com",
-  databaseURL: "https://x7nova-10d48-default-rtdb.firebaseio.com",
-  projectId: "x7nova-10d48",
-  storageBucket: "x7nova-10d48.firebasestorage.app",
-  messagingSenderId: "1020595991551",
-  appId: "1:1020595991551:web:9c610a950d1051c7826dca",
-  measurementId: "G-Z37KP4T6VP",
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// ---- Supabase project (from your krncyrxbwyazomhnuyfu project) -----------
+// The anon key is not a secret — it's meant to sit in client code. Real
+// protection comes from the Row Level Security policies on the `photos`
+// table and the `vault-photos` storage bucket, both already set up.
+const SUPABASE_URL = "https://krncyrxbwyazomhnuyfu.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtybmN5cnhid3lhem9taG51eWZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNzg3NjEsImV4cCI6MjA5MTc1NDc2MX0.6s-vfyeCm4gsZ9K4wKISwUACVs6sXNzUFBKWwtAvHn0";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const BUCKET = "vault-photos";
 
 // ---- The 10 gate stages ---------------------------------------------------
 const TRANSITIONS = ["fade", "slide", "scale", "blur"];
@@ -40,9 +24,9 @@ const STAGES = [
   { type: "numeric", answer: "789123" },
   { type: "numeric", answer: "456789" },
   { type: "numeric", answer: "123456" },
-  { type: "text", answer: "Ayush" },
-  { type: "text", answer: "Ash" },
-  { type: "text", answer: "AyushAsh" },
+  { type: "text", answer: "Tr0ub4dor&3" },
+  { type: "text", answer: "N3on$Vault!99" },
+  { type: "text", answer: "X7#nova_2026*Zq" },
 ].map((s, i) => ({ ...s, t: TRANSITIONS[i % TRANSITIONS.length] }));
 
 const MAX_ATTEMPTS = 5;
@@ -147,8 +131,18 @@ function buildNumeric(stage) {
   `;
   const dots = card.querySelectorAll("#dots span");
   const keypad = card.querySelector("#keypad");
+  let prevLength = 0;
 
-  function sync() { dots.forEach((d, i) => d.classList.toggle("filled", i < buffer.length)); }
+  function sync() {
+    dots.forEach((d, i) => d.classList.toggle("filled", i < buffer.length));
+    if (buffer.length > prevLength) {
+      const dot = dots[buffer.length - 1];
+      dot.classList.remove("pop");
+      void dot.offsetWidth; // restart animation if it's mid-play
+      dot.classList.add("pop");
+    }
+    prevLength = buffer.length;
+  }
 
   function addDigit(d) {
     if (isLocked() || buffer.length >= 6) return;
@@ -161,13 +155,27 @@ function buildNumeric(stage) {
     sync();
   }
 
-  function reset() { buffer = ""; sync(); }
+  function reset() { buffer = ""; prevLength = 0; sync(); }
+
+  function spawnRipple(btn, clientX, clientY) {
+    const rect = btn.getBoundingClientRect();
+    const hasCoords = clientX || clientY;
+    const x = hasCoords ? clientX - rect.left : rect.width / 2;
+    const y = hasCoords ? clientY - rect.top : rect.height / 2;
+    const ripple = document.createElement("span");
+    ripple.className = "ripple";
+    ripple.style.left = `${x}px`;
+    ripple.style.top = `${y}px`;
+    btn.appendChild(ripple);
+    ripple.addEventListener("animationend", () => ripple.remove());
+  }
 
   keypad.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-k]");
     if (!btn || isLocked()) return;
+    spawnRipple(btn, e.clientX, e.clientY);
     btn.classList.add("tap");
-    setTimeout(() => btn.classList.remove("tap"), 120);
+    setTimeout(() => btn.classList.remove("tap"), 380);
     if (btn.dataset.k === "del") delDigit();
     else addDigit(btn.dataset.k);
   });
@@ -234,7 +242,7 @@ function submit(value, card) {
 function onGateComplete() {
   gate.hidden = true;
   opening.hidden = false;
-  signInAnonymously(auth).catch((err) => console.error("Sign-in failed:", err));
+  supabase.auth.signInAnonymously().catch((err) => console.error("Sign-in failed:", err));
   setTimeout(() => {
     opening.hidden = true;
     vaultEl.hidden = false;
@@ -245,21 +253,42 @@ function onGateComplete() {
 let photos = [];
 let viewerIndex = 0;
 
-onAuthStateChanged(auth, (user) => {
-  if (!user) return;
-  const q = query(collection(db, "photos"), orderBy("createdAt", "desc"));
-  onSnapshot(q, (snap) => {
-    photos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    renderGrid();
-  }, (err) => {
-    console.error("Gallery sync error:", err);
-    showVaultError("Can't load photos — check Firestore rules (see README).");
-  });
+supabase.auth.onAuthStateChange((_event, session) => {
+  if (session?.user) loadGallery();
 });
 
 function showVaultError(msg) {
   empty.hidden = false;
   empty.textContent = msg;
+}
+
+async function loadGallery() {
+  const { data: rows, error } = await supabase
+    .from("photos")
+    .select("id, path, created_at")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("Gallery load error:", error);
+    showVaultError("Can't load photos — check Supabase table policies (see README).");
+    return;
+  }
+
+  if (!rows.length) { photos = []; renderGrid(); return; }
+
+  // Bucket is private, so each file needs a temporary signed URL to display.
+  const { data: signed, error: signErr } = await supabase.storage
+    .from(BUCKET)
+    .createSignedUrls(rows.map((r) => r.path), 3600);
+
+  if (signErr) {
+    console.error("Signed URL error:", signErr);
+    showVaultError("Can't load photos — check Supabase storage policies (see README).");
+    return;
+  }
+
+  photos = rows.map((r, i) => ({ id: r.id, path: r.path, url: signed[i]?.signedUrl }));
+  renderGrid();
 }
 
 function renderGrid() {
@@ -270,7 +299,7 @@ function renderGrid() {
     const tile = document.createElement("div");
     tile.className = "tile";
     const img = document.createElement("img");
-    img.src = p.data;
+    img.src = p.url;
     img.loading = "lazy";
     img.alt = "photo";
     tile.appendChild(img);
@@ -290,64 +319,33 @@ uploadInput.addEventListener("change", async (e) => {
       await uploadOne(files[i]);
     } catch (err) {
       console.error("Upload failed:", err);
-      alert("Couldn't save that photo — check Firestore rules (see README), or it may still be too large even after compression.");
+      alert("Couldn't save that photo — check Supabase policies (see README).");
       break;
     }
   }
   uploadBarFill.style.width = "100%";
+  await loadGallery();
   setTimeout(() => (uploadBar.hidden = true), 250);
 });
 
-// Firestore documents cap out at 1MB. We compress + shrink the image on
-// the phone before it ever leaves the browser, stepping down quality and
-// size until the resulting base64 string comfortably fits, then store it
-// directly as a Firestore field — no Storage bucket, no Blaze plan needed.
-const MAX_BASE64_CHARS = 700 * 1024; // ~700KB of base64 text, safely under 1MB doc cap
-
+// Full-resolution upload — no compression. Stored in Supabase Storage,
+// with just a path reference kept in the `photos` table.
 async function uploadOne(file) {
-  const dataUrl = await compressToFit(file);
-  await addDoc(collection(db, "photos"), { data: dataUrl, createdAt: serverTimestamp() });
-}
-
-function compressToFit(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Couldn't read file"));
-    reader.onload = () => { img.src = reader.result; };
-    img.onerror = () => reject(new Error("Couldn't decode image"));
-    img.onload = () => {
-      let maxDim = 1600;
-      let quality = 0.82;
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-
-      const attempt = () => {
-        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
-
-        if (dataUrl.length <= MAX_BASE64_CHARS || (maxDim <= 480 && quality <= 0.4)) {
-          resolve(dataUrl);
-          return;
-        }
-        // Still too big: shrink dimensions first, then drop quality, and try again.
-        if (maxDim > 480) maxDim = Math.round(maxDim * 0.8);
-        else quality = Math.max(0.4, quality - 0.1);
-        attempt();
-      };
-      attempt();
-    };
-    reader.readAsDataURL(file);
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.name}`;
+  const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file, {
+    cacheControl: "3600",
+    upsert: false,
   });
+  if (upErr) throw upErr;
+
+  const { error: insErr } = await supabase.from("photos").insert({ path });
+  if (insErr) throw insErr;
 }
 
-function openViewer(i) { viewerIndex = i; viewerImg.src = photos[i].data; viewer.hidden = false; }
+function openViewer(i) { viewerIndex = i; viewerImg.src = photos[i].url; viewer.hidden = false; }
 viewerClose.addEventListener("click", () => (viewer.hidden = true));
-viewerPrev.addEventListener("click", () => { viewerIndex = (viewerIndex - 1 + photos.length) % photos.length; viewerImg.src = photos[viewerIndex].data; });
-viewerNext.addEventListener("click", () => { viewerIndex = (viewerIndex + 1) % photos.length; viewerImg.src = photos[viewerIndex].data; });
+viewerPrev.addEventListener("click", () => { viewerIndex = (viewerIndex - 1 + photos.length) % photos.length; viewerImg.src = photos[viewerIndex].url; });
+viewerNext.addEventListener("click", () => { viewerIndex = (viewerIndex + 1) % photos.length; viewerImg.src = photos[viewerIndex].url; });
 document.addEventListener("keydown", (e) => {
   if (viewer.hidden) return;
   if (e.key === "Escape") viewer.hidden = true;
@@ -358,8 +356,10 @@ viewerDelete.addEventListener("click", async () => {
   const p = photos[viewerIndex];
   if (!p || !confirm("Delete this photo?")) return;
   try {
-    await deleteDoc(doc(db, "photos", p.id));
+    await supabase.storage.from(BUCKET).remove([p.path]);
+    await supabase.from("photos").delete().eq("id", p.id);
     viewer.hidden = true;
+    await loadGallery();
   } catch (err) {
     console.error("Delete failed:", err);
     alert("Couldn't delete that photo.");
