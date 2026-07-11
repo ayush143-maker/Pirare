@@ -60,21 +60,64 @@ html, body {
 .dots { display: flex; gap: 10px; justify-content: center; margin-bottom: 24px; }
 .dots span {
   width: 12px; height: 12px; border-radius: 50%;
-  border: 1.5px solid var(--panel-2); transition: all .15s ease;
+  border: 1.5px solid var(--panel-2);
+  transition: background-color .18s ease, border-color .18s ease;
+  transform: scale(1);
 }
 .dots span.filled { background: var(--green); border-color: var(--green); }
+.dots span.pop { animation: dotPop .32s cubic-bezier(.34,1.56,.64,1); }
+@keyframes dotPop {
+  0%   { transform: scale(0.7); }
+  55%  { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
 
 .numeric-input { position: absolute; opacity: 0; pointer-events: none; }
 
 .keypad { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; max-width: 260px; margin: 0 auto; }
 .keypad button {
+  position: relative;
   aspect-ratio: 1; border-radius: 50%; border: 1px solid var(--line);
   background: var(--panel-2); color: var(--text); font-size: 18px;
   font-family: var(--mono); cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  transform: scale(1);
+  transition:
+    transform .38s cubic-bezier(.34, 1.56, .64, 1),
+    box-shadow .28s ease,
+    border-color .28s ease,
+    background-color .28s ease;
+  will-change: transform;
 }
-.keypad button:active, .keypad button.tap { background: #26292c; border-color: var(--green-dim); }
+.keypad button.tap {
+  transform: scale(0.95);
+  background: #23262a;
+  border-color: var(--green-dim);
+  box-shadow: 0 0 0 1px rgba(47,227,116,0.25), 0 0 18px 2px rgba(47,227,116,0.28);
+}
 .keypad button.key-del { font-size: 12px; color: var(--text-dim); }
 .keypad button.key-empty { visibility: hidden; }
+
+/* Soft circular ripple expanding from the touch point, JS positions it */
+.keypad button .ripple {
+  position: absolute;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(47,227,116,0.45) 0%, rgba(47,227,116,0.12) 55%, transparent 75%);
+  transform: translate(-50%, -50%) scale(0);
+  pointer-events: none;
+  animation: rippleExpand .55s cubic-bezier(.22, .8, .32, 1) forwards;
+}
+@keyframes rippleExpand {
+  0%   { transform: translate(-50%, -50%) scale(0);   opacity: 0.9; }
+  60%  { opacity: 0.5; }
+  100% { transform: translate(-50%, -50%) scale(11);  opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .keypad button, .dots span { transition: none !important; animation: none !important; }
+}
 
 /* text entry for stages 8-10 */
 .text-input-wrap { position: relative; margin-bottom: 20px; }
