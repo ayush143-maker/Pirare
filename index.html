@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>NOVA VAULT — Private Access</title>
+<meta name="description" content="Private encrypted photo vault" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- Ambient background grid + glow -->
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <!-- ============ GATE (10 sequential password screens) ============ -->
+  <main id="gate" class="gate">
+
+    <div class="gate-progress" aria-hidden="true">
+      <div class="gate-progress__bar" id="progressBar"></div>
+      <span class="gate-progress__label" id="progressLabel">STAGE 01 / 10</span>
+    </div>
+
+    <div class="screen-stack" id="screenStack">
+      <!-- Screens are injected here by JS, one at a time -->
+    </div>
+
+    <div class="lockout" id="lockout" hidden>
+      <div class="lockout__icon">⛔</div>
+      <p class="lockout__text">TOO MANY FAILED ATTEMPTS</p>
+      <p class="lockout__timer" id="lockoutTimer">Locked for 30s</p>
+    </div>
+
+  </main>
+
+  <!-- ============ FIREBASE SIGN-IN (real security boundary) ============ -->
+  <main id="authGate" class="auth-gate" hidden>
+    <div class="auth-card glass">
+      <div class="auth-card__icon">◈</div>
+      <h1 class="auth-card__title">IDENTITY VERIFICATION</h1>
+      <p class="auth-card__sub">Sequence cleared. Sign in to decrypt your vault.</p>
+
+      <form id="authForm" autocomplete="off">
+        <label class="field">
+          <span>Email</span>
+          <input type="email" id="authEmail" autocomplete="off" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="authPassword" autocomplete="off" required />
+        </label>
+        <button type="submit" class="btn-primary" id="authSubmit">
+          <span>Authenticate</span>
+        </button>
+        <p class="auth-error" id="authError"></p>
+      </form>
+    </div>
+  </main>
+
+  <!-- ============ VAULT OPENING ANIMATION ============ -->
+  <div id="vaultOpening" class="vault-opening" hidden>
+    <div class="vault-door vault-door--left"></div>
+    <div class="vault-door vault-door--right"></div>
+    <div class="vault-opening__label">DECRYPTING VAULT</div>
+  </div>
+
+  <!-- ============ FINAL VAULT ============ -->
+  <main id="vault" class="vault" hidden>
+    <header class="vault-header">
+      <div class="vault-header__brand">
+        <span class="brand-mark">◈</span>
+        <span class="brand-text">NOVA VAULT</span>
+      </div>
+      <div class="vault-header__actions">
+        <label class="btn-upload">
+          <input type="file" id="uploadInput" accept="image/*" multiple hidden />
+          <span>+ Upload</span>
+        </label>
+        <button id="signOutBtn" class="btn-ghost">Sign out</button>
+      </div>
+    </header>
+
+    <div class="upload-progress" id="uploadProgress" hidden>
+      <div class="upload-progress__bar" id="uploadProgressBar"></div>
+      <span id="uploadProgressLabel">Uploading…</span>
+    </div>
+
+    <section class="masonry" id="masonry" aria-live="polite">
+      <!-- Photo tiles injected here -->
+    </section>
+
+    <p class="empty-state" id="emptyState" hidden>
+      Your vault is empty. Upload your first photo to begin.
+    </p>
+  </main>
+
+  <!-- ============ FULLSCREEN VIEWER ============ -->
+  <div id="viewer" class="viewer" hidden>
+    <button class="viewer__close" id="viewerClose" aria-label="Close">✕</button>
+    <button class="viewer__delete" id="viewerDelete" aria-label="Delete">Delete</button>
+    <button class="viewer__nav viewer__nav--prev" id="viewerPrev" aria-label="Previous">‹</button>
+    <img class="viewer__img" id="viewerImg" alt="" />
+    <button class="viewer__nav viewer__nav--next" id="viewerNext" aria-label="Next">›</button>
+  </div>
+
+  <!-- ES modules: each file imports exactly what it needs -->
+  <script type="module" src="js/gatekeeper.js"></script>
+  <script type="module" src="js/vault.js"></script>
+</body>
+</html>
