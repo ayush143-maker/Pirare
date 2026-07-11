@@ -48,11 +48,16 @@ const uploadInput = document.getElementById("uploadInput");
 const uploadBar = document.getElementById("uploadBar");
 const uploadBarFill = document.getElementById("uploadBarFill");
 const viewer = document.getElementById("viewer");
+const viewerStage = document.getElementById("viewerStage");
 const viewerImg = document.getElementById("viewerImg");
 const viewerClose = document.getElementById("viewerClose");
 const viewerDelete = document.getElementById("viewerDelete");
 const viewerPrev = document.getElementById("viewerPrev");
 const viewerNext = document.getElementById("viewerNext");
+const selectionBar = document.getElementById("selectionBar");
+const selectionCount = document.getElementById("selectionCount");
+const selectionCancel = document.getElementById("selectionCancel");
+const selectionDelete = document.getElementById("selectionDelete");
 
 // ---- Gate state --------------------------------------------------------
 let stageIndex = 0;
@@ -291,23 +296,121 @@ async function loadGallery() {
   renderGrid();
 }
 
+// ---- Grid: render, fade-in thumbnails, long-press selection ---------------
+let selectionMode = false;
+const selectedIds = new Set();
+
 function renderGrid() {
   grid.innerHTML = "";
   empty.hidden = photos.length !== 0;
   empty.textContent = "No photos yet. Tap + Add.";
+
   photos.forEach((p, i) => {
     const tile = document.createElement("div");
     tile.className = "tile";
+    tile.dataset.id = p.id;
+
     const img = document.createElement("img");
     img.src = p.url;
     img.loading = "lazy";
     img.alt = "photo";
+    img.draggable = false;
+    img.addEventListener("load", () => img.classList.add("loaded"));
     tile.appendChild(img);
-    tile.addEventListener("click", () => openViewer(i));
+
+    const check = document.createElement("div");
+    check.className = "tile__check";
+    check.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    tile.appendChild(check);
+
+    attachTileGestures(tile, p.id, i, img);
     grid.appendChild(tile);
+  });
+
+  // Re-apply selection visuals in case a reload happened mid-selection.
+  grid.classList.toggle("selection-mode", selectionMode);
+  grid.querySelectorAll(".tile").forEach((t) => {
+    t.classList.toggle("selected", selectedIds.has(t.dataset.id));
   });
 }
 
+function attachTileGestures(tile, id, index, img) {
+  const LONG_PRESS_MS = 450;
+  const MOVE_CANCEL_PX = 10;
+  let pressTimer = null;
+  let longPressFired = false;
+  let startX = 0, startY = 0;
+
+  const clearPressTimer = () => { clearTimeout(pressTimer); pressTimer = null; };
+  const cancelPress = () => { clearPressTimer(); tile.classList.remove("pressed"); };
+
+  tile.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    longPressFired = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    tile.classList.add("pressed");
+    pressTimer = setTimeout(() => {
+      longPressFired = true;
+      tile.classList.remove("pressed");
+      navigator.vibrate?.(40);
+      enterSelectionMode();
+      toggleSelect(id, tile);
+    }, LONG_PRESS_MS);
+  });
+
+  tile.addEventListener("pointermove", (e) => {
+    if (!pressTimer) return;
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > MOVE_CANCEL_PX) cancelPress();
+  });
+  tile.addEventListener("pointerup", cancelPress);
+  tile.addEventListener("pointerleave", cancelPress);
+  tile.addEventListener("pointercancel", cancelPress);
+
+  tile.addEventListener("click", () => {
+    if (longPressFired) { longPressFired = false; return; }
+    if (selectionMode) { toggleSelect(id, tile); return; }
+    openViewer(index, img);
+  });
+}
+
+function enterSelectionMode() {
+  if (selectionMode) return;
+  selectionMode = true;
+  grid.classList.add("selection-mode");
+  selectionBar.hidden = false;
+}
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedIds.clear();
+  grid.classList.remove("selection-mode");
+  selectionBar.hidden = true;
+  grid.querySelectorAll(".tile.selected").forEach((t) => t.classList.remove("selected"));
+}
+function toggleSelect(id, tile) {
+  if (selectedIds.has(id)) { selectedIds.delete(id); tile.classList.remove("selected"); }
+  else { selectedIds.add(id); tile.classList.add("selected"); }
+  selectionCount.textContent = `${selectedIds.size} selected`;
+  if (selectedIds.size === 0) exitSelectionMode();
+}
+
+selectionCancel.addEventListener("click", exitSelectionMode);
+selectionDelete.addEventListener("click", async () => {
+  if (!selectedIds.size) return;
+  const targets = photos.filter((p) => selectedIds.has(p.id));
+  if (!confirm(`Delete ${targets.length} photo(s)?`)) return;
+  try {
+    await supabase.storage.from(BUCKET).remove(targets.map((p) => p.path));
+    await supabase.from("photos").delete().in("id", targets.map((p) => p.id));
+    exitSelectionMode();
+    await loadGallery();
+  } catch (err) {
+    console.error("Bulk delete failed:", err);
+    alert("Couldn't delete the selected photos.");
+  }
+});
+
+// ---- Upload -----------------------------------------------------------
 uploadInput.addEventListener("change", async (e) => {
   const files = Array.from(e.target.files || []);
   e.target.value = "";
@@ -342,15 +445,148 @@ async function uploadOne(file) {
   if (insErr) throw insErr;
 }
 
-function openViewer(i) { viewerIndex = i; viewerImg.src = photos[i].url; viewer.hidden = false; }
-viewerClose.addEventListener("click", () => (viewer.hidden = true));
-viewerPrev.addEventListener("click", () => { viewerIndex = (viewerIndex - 1 + photos.length) % photos.length; viewerImg.src = photos[viewerIndex].url; });
-viewerNext.addEventListener("click", () => { viewerIndex = (viewerIndex + 1) % photos.length; viewerImg.src = photos[viewerIndex].url; });
+// ---- Viewer: open/close FLIP animation, pinch/pan/swipe gestures ----------
+let zoomScale = 1;
+let panX = 0;
+let panY = 0;
+
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+function applyZoomTransform() {
+  const maxPan = 220 * (zoomScale - 1);
+  panX = clamp(panX, -maxPan, maxPan);
+  panY = clamp(panY, -maxPan, maxPan);
+  viewerImg.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+}
+
+function resetZoomState() {
+  zoomScale = 1;
+  panX = 0;
+  panY = 0;
+  applyZoomTransform();
+}
+
+function tileImgFor(photoId) {
+  const tile = grid.querySelector(`.tile[data-id="${CSS.escape(String(photoId))}"]`);
+  return tile ? tile.querySelector("img") : null;
+}
+
+function openViewer(i, originImgEl) {
+  viewerIndex = i;
+  const photo = photos[i];
+  if (!photo) return;
+
+  const originRect = originImgEl ? originImgEl.getBoundingClientRect() : null;
+
+  viewerImg.classList.remove("loaded", "spring");
+  viewerImg.style.transition = "none";
+  viewerImg.style.transform = "none";
+  viewerImg.src = photo.url;
+
+  viewer.hidden = false;
+  viewer.classList.remove("controls-visible");
+  requestAnimationFrame(() => viewer.classList.add("show"));
+
+  const runEntrance = () => {
+    resetZoomState();
+    viewerImg.classList.add("loaded");
+
+    if (originRect) {
+      const finalRect = viewerImg.getBoundingClientRect();
+      const scale = Math.min(originRect.width / finalRect.width, originRect.height / finalRect.height) || 1;
+      const dx = (originRect.left + originRect.width / 2) - (finalRect.left + finalRect.width / 2);
+      const dy = (originRect.top + originRect.height / 2) - (finalRect.top + finalRect.height / 2);
+      viewerImg.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
+      void viewerImg.offsetWidth; // force reflow before animating
+      viewerImg.style.transition = "";
+      viewerImg.classList.add("spring");
+      requestAnimationFrame(() => { viewerImg.style.transform = "translate(0px, 0px) scale(1)"; });
+    } else {
+      viewerImg.style.transform = "scale(0.85)";
+      void viewerImg.offsetWidth;
+      viewerImg.style.transition = "";
+      viewerImg.classList.add("spring");
+      requestAnimationFrame(() => { viewerImg.style.transform = "translate(0px, 0px) scale(1)"; });
+    }
+  };
+
+  if (viewerImg.complete && viewerImg.naturalWidth) runEntrance();
+  else viewerImg.addEventListener("load", runEntrance, { once: true });
+}
+
+function closeViewer() {
+  const photo = photos[viewerIndex];
+  const targetImg = photo ? tileImgFor(photo.id) : null;
+  const targetRect = targetImg ? targetImg.getBoundingClientRect() : null;
+
+  viewer.classList.remove("controls-visible");
+  viewerImg.classList.add("spring");
+  viewerImg.classList.remove("loaded");
+  viewer.style.opacity = "";
+
+  if (targetRect) {
+    const currentRect = viewerImg.getBoundingClientRect();
+    const scale = Math.min(targetRect.width / currentRect.width, targetRect.height / currentRect.height) || 1;
+    const dx = (targetRect.left + targetRect.width / 2) - (currentRect.left + currentRect.width / 2);
+    const dy = (targetRect.top + targetRect.height / 2) - (currentRect.top + currentRect.height / 2);
+    viewerImg.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
+  } else {
+    viewerImg.style.transform = "scale(0.85)";
+  }
+
+  viewer.classList.remove("show");
+
+  setTimeout(() => {
+    viewer.hidden = true;
+    viewerImg.style.transform = "";
+    viewerImg.style.transition = "";
+    viewerImg.classList.remove("spring");
+    resetZoomState();
+  }, 340);
+}
+
+function goTo(newIndex) {
+  if (!photos.length) return;
+  viewerIndex = (newIndex + photos.length) % photos.length;
+  const photo = photos[viewerIndex];
+  resetZoomState();
+  viewerImg.classList.remove("loaded");
+  viewerImg.style.transition = "";
+  viewerImg.style.transform = "";
+  viewerImg.src = photo.url;
+  viewerImg.addEventListener("load", () => viewerImg.classList.add("loaded"), { once: true });
+}
+
+function toggleControls() {
+  viewer.classList.toggle("controls-visible");
+}
+
+function handleDoubleTap(clientX, clientY) {
+  if (zoomScale > 1) {
+    zoomScale = 1;
+    panX = 0;
+    panY = 0;
+  } else {
+    const rect = viewerImg.getBoundingClientRect();
+    const offsetX = clientX - (rect.left + rect.width / 2);
+    const offsetY = clientY - (rect.top + rect.height / 2);
+    zoomScale = 2.5;
+    panX = -offsetX * (zoomScale - 1) / zoomScale;
+    panY = -offsetY * (zoomScale - 1) / zoomScale;
+  }
+  viewerImg.style.transition = "transform .35s cubic-bezier(.34,1.56,.64,1)";
+  applyZoomTransform();
+  setTimeout(() => { viewerImg.style.transition = ""; }, 350);
+}
+
+viewerClose.addEventListener("click", closeViewer);
+viewerPrev.addEventListener("click", () => goTo(viewerIndex - 1));
+viewerNext.addEventListener("click", () => goTo(viewerIndex + 1));
 document.addEventListener("keydown", (e) => {
   if (viewer.hidden) return;
-  if (e.key === "Escape") viewer.hidden = true;
-  if (e.key === "ArrowLeft") viewerPrev.click();
-  if (e.key === "ArrowRight") viewerNext.click();
+  if (e.key === "Escape") closeViewer();
+  if (e.key === "ArrowLeft") goTo(viewerIndex - 1);
+  if (e.key === "ArrowRight") goTo(viewerIndex + 1);
 });
 viewerDelete.addEventListener("click", async () => {
   const p = photos[viewerIndex];
@@ -358,13 +594,125 @@ viewerDelete.addEventListener("click", async () => {
   try {
     await supabase.storage.from(BUCKET).remove([p.path]);
     await supabase.from("photos").delete().eq("id", p.id);
-    viewer.hidden = true;
+    closeViewer();
     await loadGallery();
   } catch (err) {
     console.error("Delete failed:", err);
     alert("Couldn't delete that photo.");
   }
 });
+
+// Pointer-based gestures on the stage: pinch-zoom, pan-when-zoomed,
+// swipe-down-to-close, swipe-left/right-to-navigate, double-tap-to-zoom,
+// single-tap-to-toggle-controls. Pointer Events give each touch/finger a
+// distinct pointerId, so two simultaneous pointers = a pinch gesture.
+const activePointers = new Map();
+let isPinching = false;
+let pinchStartDist = 0;
+let pinchStartScale = 1;
+let dragStart = null;
+let lastTapTime = 0;
+let lastTapPos = null;
+
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+viewerStage.addEventListener("pointerdown", (e) => {
+  viewerStage.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (activePointers.size === 2) {
+    isPinching = true;
+    dragStart = null;
+    const pts = [...activePointers.values()];
+    pinchStartDist = dist(pts[0], pts[1]) || 1;
+    pinchStartScale = zoomScale;
+  } else if (activePointers.size === 1) {
+    isPinching = false;
+    dragStart = { x: e.clientX, y: e.clientY, panX, panY, time: Date.now(), moved: false };
+
+    const now = Date.now();
+    if (lastTapPos && now - lastTapTime < 320 && Math.hypot(e.clientX - lastTapPos.x, e.clientY - lastTapPos.y) < 40) {
+      handleDoubleTap(e.clientX, e.clientY);
+      lastTapTime = 0;
+      lastTapPos = null;
+    } else {
+      lastTapTime = now;
+      lastTapPos = { x: e.clientX, y: e.clientY };
+    }
+  }
+});
+
+viewerStage.addEventListener("pointermove", (e) => {
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (isPinching && activePointers.size === 2) {
+    const pts = [...activePointers.values()];
+    const d = dist(pts[0], pts[1]) || 1;
+    zoomScale = clamp(pinchStartScale * (d / pinchStartDist), 1, 4);
+    applyZoomTransform();
+    return;
+  }
+
+  if (activePointers.size === 1 && dragStart) {
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (Math.hypot(dx, dy) > 6) dragStart.moved = true;
+
+    if (zoomScale > 1) {
+      panX = dragStart.panX + dx;
+      panY = dragStart.panY + dy;
+      applyZoomTransform();
+    } else if (Math.abs(dy) > Math.abs(dx)) {
+      viewer.style.opacity = String(clamp(1 - Math.abs(dy) / 400, 0.3, 1));
+      viewerImg.style.transform = `translateY(${dy}px) scale(${clamp(1 - Math.abs(dy) / 1000, 0.85, 1)})`;
+    } else {
+      viewerImg.style.transform = `translateX(${dx}px)`;
+    }
+  }
+});
+
+function settleSwipe() {
+  viewer.style.opacity = "";
+  viewerImg.style.transition = "transform .3s cubic-bezier(.34,1.56,.64,1)";
+  viewerImg.style.transform = "";
+  setTimeout(() => { viewerImg.style.transition = ""; }, 300);
+}
+
+function endGesture(e) {
+  activePointers.delete(e.pointerId);
+
+  if (isPinching && activePointers.size < 2) {
+    isPinching = false;
+    pinchStartDist = 0;
+    if (zoomScale <= 1.02) resetZoomState();
+  }
+
+  if (activePointers.size === 0 && dragStart) {
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    const dt = Date.now() - dragStart.time;
+    const wasDrag = dragStart.moved;
+
+    if (zoomScale <= 1 && wasDrag) {
+      if (Math.abs(dy) > Math.abs(dx)) {
+        if (dy > 110 || (dy > 60 && dt < 250)) closeViewer();
+        else settleSwipe();
+      } else if (Math.abs(dx) > 70) {
+        goTo(dx < 0 ? viewerIndex + 1 : viewerIndex - 1);
+      } else {
+        settleSwipe();
+      }
+    } else if (!wasDrag && zoomScale <= 1) {
+      toggleControls();
+    }
+    dragStart = null;
+  }
+}
+
+viewerStage.addEventListener("pointerup", endGesture);
+viewerStage.addEventListener("pointercancel", endGesture);
+viewerImg.addEventListener("contextmenu", (e) => e.preventDefault());
 
 // ---- Boot -------------------------------------------------------------
 renderStage();
