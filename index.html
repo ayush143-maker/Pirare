@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Vault</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- ============ GATE: 10 password screens ============ -->
+  <main id="gate" class="gate">
+    <div class="progress">
+      <div class="progress__fill" id="progressFill"></div>
+    </div>
+    <p class="progress__label" id="progressLabel">Stage 1 / 10</p>
+
+    <div id="screenHost" class="screen-host"></div>
+
+    <div class="lockout" id="lockout" hidden>
+      <p>Too many attempts</p>
+      <p id="lockoutTimer" class="lockout__timer"></p>
+    </div>
+  </main>
+
+  <!-- ============ Vault opening animation ============ -->
+  <div id="opening" class="opening" hidden>
+    <div class="opening__door opening__door--l"></div>
+    <div class="opening__door opening__door--r"></div>
+  </div>
+
+  <!-- ============ Photo vault ============ -->
+  <main id="vault" class="vault" hidden>
+    <header class="vault__bar">
+      <span class="vault__title">Vault</span>
+      <label class="btn btn--sm">
+        + Add
+        <input type="file" id="uploadInput" accept="image/*" multiple hidden />
+      </label>
+    </header>
+
+    <div class="upload-bar" id="uploadBar" hidden>
+      <div class="upload-bar__fill" id="uploadBarFill"></div>
+    </div>
+
+    <section class="grid" id="grid"></section>
+    <p class="empty" id="empty" hidden>No photos yet. Tap + Add.</p>
+  </main>
+
+  <!-- ============ Fullscreen viewer ============ -->
+  <div id="viewer" class="viewer" hidden>
+    <button class="viewer__btn viewer__close" id="viewerClose">✕</button>
+    <button class="viewer__btn viewer__del" id="viewerDelete">Delete</button>
+    <button class="viewer__btn viewer__nav viewer__prev" id="viewerPrev">‹</button>
+    <img class="viewer__img" id="viewerImg" alt="" />
+    <button class="viewer__btn viewer__nav viewer__next" id="viewerNext">›</button>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
