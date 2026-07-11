@@ -11,9 +11,6 @@ import {
   getFirestore, collection, addDoc, deleteDoc, doc,
   query, orderBy, onSnapshot, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import {
-  getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject,
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
 // ---- Firebase config -----------------------------------------------------
 // Not a secret (see README) — real protection comes from the Firestore /
@@ -32,7 +29,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 
 // ---- The 10 gate stages ---------------------------------------------------
 const TRANSITIONS = ["fade", "slide", "scale", "blur"];
@@ -44,8 +40,8 @@ const STAGES = [
   { type: "numeric", answer: "789123" },
   { type: "numeric", answer: "456789" },
   { type: "numeric", answer: "123456" },
-  { type: "text", answer: "Ayush" },
-  { type: "text", answer: "Ash" },
+  { type: "text", answer: "Tr0ub4dor&3" },
+  { type: "text", answer: "N3on$Vault!99" },
   { type: "text", answer: "X7#nova_2026*Zq" },
 ].map((s, i) => ({ ...s, t: TRANSITIONS[i % TRANSITIONS.length] }));
 
@@ -111,6 +107,9 @@ function startLockout() {
 
 function renderStage() {
   if (stageIndex >= STAGES.length) { onGateComplete(); return; }
+  activeAddDigit = null;
+  activeDelDigit = null;
+  activeResetDigits = null;
   progressFill.style.width = `${Math.round((stageIndex / STAGES.length) * 100)}%`;
   progressLabel.textContent = `Stage ${stageIndex + 1} / ${STAGES.length}`;
 
@@ -122,14 +121,23 @@ function renderStage() {
   screenHost.appendChild(card);
 }
 
+let activeAddDigit = null;
+let activeDelDigit = null;
+let activeResetDigits = null;
+
+document.addEventListener("keydown", (e) => {
+  if (!activeAddDigit) return;
+  if (/^[0-9]$/.test(e.key)) activeAddDigit(e.key);
+  else if (e.key === "Backspace") activeDelDigit();
+});
+
 function buildNumeric(stage) {
+  let buffer = "";
   const card = document.createElement("div");
   card.innerHTML = `
     <h2 class="card__title">Stage ${stageIndex + 1}</h2>
     <p class="card__hint">Enter the 6-digit code</p>
     <div class="dots" id="dots">${"<span></span>".repeat(6)}</div>
-    <input class="numeric-input" id="numInput" type="tel" inputmode="numeric"
-           maxlength="6" autocomplete="off" autocorrect="off" spellcheck="false" />
     <div class="keypad" id="keypad">
       ${[1,2,3,4,5,6,7,8,9].map((n) => `<button type="button" data-k="${n}">${n}</button>`).join("")}
       <button type="button" class="key-empty"></button>
@@ -137,32 +145,37 @@ function buildNumeric(stage) {
       <button type="button" class="key-del" data-k="del">DEL</button>
     </div>
   `;
-  const input = card.querySelector("#numInput");
   const dots = card.querySelectorAll("#dots span");
   const keypad = card.querySelector("#keypad");
 
-  ["paste", "copy", "cut"].forEach((evt) => input.addEventListener(evt, (e) => e.preventDefault()));
+  function sync() { dots.forEach((d, i) => d.classList.toggle("filled", i < buffer.length)); }
 
-  function sync() { dots.forEach((d, i) => d.classList.toggle("filled", i < input.value.length)); }
+  function addDigit(d) {
+    if (isLocked() || buffer.length >= 6) return;
+    buffer += d;
+    sync();
+    if (buffer.length === 6) submit(buffer, card);
+  }
+  function delDigit() {
+    buffer = buffer.slice(0, -1);
+    sync();
+  }
+
+  function reset() { buffer = ""; sync(); }
 
   keypad.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-k]");
     if (!btn || isLocked()) return;
     btn.classList.add("tap");
     setTimeout(() => btn.classList.remove("tap"), 120);
-    if (btn.dataset.k === "del") input.value = input.value.slice(0, -1);
-    else if (input.value.length < 6) input.value += btn.dataset.k;
-    sync();
-    if (input.value.length === 6) submit(input.value, card);
+    if (btn.dataset.k === "del") delDigit();
+    else addDigit(btn.dataset.k);
   });
 
-  input.addEventListener("input", () => {
-    input.value = input.value.replace(/\D/g, "").slice(0, 6);
-    sync();
-    if (input.value.length === 6) submit(input.value, card);
-  });
+  activeAddDigit = addDigit;
+  activeDelDigit = delDigit;
+  activeResetDigits = reset;
 
-  setTimeout(() => input.focus(), 30);
   return card;
 }
 
@@ -210,9 +223,8 @@ function submit(value, card) {
     card.classList.add("wrong");
     navigator.vibrate?.(100);
     setTimeout(() => card.classList.remove("wrong"), 400);
-    const num = card.querySelector("#numInput");
+    if (activeResetDigits) activeResetDigits();
     const txt = card.querySelector("#txt");
-    if (num) { num.value = ""; card.querySelectorAll(".dots span").forEach((d) => d.classList.remove("filled")); }
     if (txt) txt.value = "";
     if (attempts >= MAX_ATTEMPTS) setTimeout(startLockout, 150);
   }
@@ -239,17 +251,26 @@ onAuthStateChanged(auth, (user) => {
   onSnapshot(q, (snap) => {
     photos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderGrid();
-  }, (err) => console.error("Gallery sync error:", err));
+  }, (err) => {
+    console.error("Gallery sync error:", err);
+    showVaultError("Can't load photos — check Firestore rules (see README).");
+  });
 });
+
+function showVaultError(msg) {
+  empty.hidden = false;
+  empty.textContent = msg;
+}
 
 function renderGrid() {
   grid.innerHTML = "";
   empty.hidden = photos.length !== 0;
+  empty.textContent = "No photos yet. Tap + Add.";
   photos.forEach((p, i) => {
     const tile = document.createElement("div");
     tile.className = "tile";
     const img = document.createElement("img");
-    img.src = p.url;
+    img.src = p.data;
     img.loading = "lazy";
     img.alt = "photo";
     tile.appendChild(img);
@@ -263,30 +284,70 @@ uploadInput.addEventListener("change", async (e) => {
   e.target.value = "";
   if (!files.length) return;
   uploadBar.hidden = false;
-  for (const file of files) await uploadOne(file);
-  uploadBar.hidden = true;
+  for (let i = 0; i < files.length; i++) {
+    uploadBarFill.style.width = `${Math.round((i / files.length) * 100)}%`;
+    try {
+      await uploadOne(files[i]);
+    } catch (err) {
+      console.error("Upload failed:", err);
+      alert("Couldn't save that photo — check Firestore rules (see README), or it may still be too large even after compression.");
+      break;
+    }
+  }
+  uploadBarFill.style.width = "100%";
+  setTimeout(() => (uploadBar.hidden = true), 250);
 });
 
-function uploadOne(file) {
+// Firestore documents cap out at 1MB. We compress + shrink the image on
+// the phone before it ever leaves the browser, stepping down quality and
+// size until the resulting base64 string comfortably fits, then store it
+// directly as a Firestore field — no Storage bucket, no Blaze plan needed.
+const MAX_BASE64_CHARS = 700 * 1024; // ~700KB of base64 text, safely under 1MB doc cap
+
+async function uploadOne(file) {
+  const dataUrl = await compressToFit(file);
+  await addDoc(collection(db, "photos"), { data: dataUrl, createdAt: serverTimestamp() });
+}
+
+function compressToFit(file) {
   return new Promise((resolve, reject) => {
-    const path = `vault/${Date.now()}-${file.name}`;
-    const task = uploadBytesResumable(ref(storage, path), file);
-    task.on("state_changed",
-      (snap) => { uploadBarFill.style.width = `${Math.round((snap.bytesTransferred / snap.totalBytes) * 100)}%`; },
-      (err) => { console.error("Upload failed:", err); reject(err); },
-      async () => {
-        const url = await getDownloadURL(task.snapshot.ref);
-        await addDoc(collection(db, "photos"), { url, storagePath: path, createdAt: serverTimestamp() });
-        resolve();
-      }
-    );
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read file"));
+    reader.onload = () => { img.src = reader.result; };
+    img.onerror = () => reject(new Error("Couldn't decode image"));
+    img.onload = () => {
+      let maxDim = 1600;
+      let quality = 0.82;
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      const attempt = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+
+        if (dataUrl.length <= MAX_BASE64_CHARS || (maxDim <= 480 && quality <= 0.4)) {
+          resolve(dataUrl);
+          return;
+        }
+        // Still too big: shrink dimensions first, then drop quality, and try again.
+        if (maxDim > 480) maxDim = Math.round(maxDim * 0.8);
+        else quality = Math.max(0.4, quality - 0.1);
+        attempt();
+      };
+      attempt();
+    };
+    reader.readAsDataURL(file);
   });
 }
 
-function openViewer(i) { viewerIndex = i; viewerImg.src = photos[i].url; viewer.hidden = false; }
+function openViewer(i) { viewerIndex = i; viewerImg.src = photos[i].data; viewer.hidden = false; }
 viewerClose.addEventListener("click", () => (viewer.hidden = true));
-viewerPrev.addEventListener("click", () => { viewerIndex = (viewerIndex - 1 + photos.length) % photos.length; viewerImg.src = photos[viewerIndex].url; });
-viewerNext.addEventListener("click", () => { viewerIndex = (viewerIndex + 1) % photos.length; viewerImg.src = photos[viewerIndex].url; });
+viewerPrev.addEventListener("click", () => { viewerIndex = (viewerIndex - 1 + photos.length) % photos.length; viewerImg.src = photos[viewerIndex].data; });
+viewerNext.addEventListener("click", () => { viewerIndex = (viewerIndex + 1) % photos.length; viewerImg.src = photos[viewerIndex].data; });
 document.addEventListener("keydown", (e) => {
   if (viewer.hidden) return;
   if (e.key === "Escape") viewer.hidden = true;
@@ -298,7 +359,6 @@ viewerDelete.addEventListener("click", async () => {
   if (!p || !confirm("Delete this photo?")) return;
   try {
     await deleteDoc(doc(db, "photos", p.id));
-    await deleteObject(ref(storage, p.storagePath));
     viewer.hidden = true;
   } catch (err) {
     console.error("Delete failed:", err);
