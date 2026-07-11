@@ -24,9 +24,9 @@ const STAGES = [
   { type: "numeric", answer: "170708" },
   { type: "numeric", answer: "170709" },
   { type: "numeric", answer: "933595" },
-  { type: "text", answer: "Tr0ub4dor&3" },
-  { type: "text", answer: "N3on$Vault!99" },
-  { type: "text", answer: "X7#nova_2026*Zq" },
+  { type: "text", answer: "Ayush" },
+  { type: "text", answer: "Ash" },
+  { type: "text", answer: "AyushxAsh" },
 ].map((s, i) => ({ ...s, t: TRANSITIONS[i % TRANSITIONS.length] }));
 
 const MAX_ATTEMPTS = 5;
