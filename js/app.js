@@ -17,16 +17,16 @@ const BUCKET = "vault-photos";
 // ---- The 10 gate stages ---------------------------------------------------
 const TRANSITIONS = ["fade", "slide", "scale", "blur"];
 const STAGES = [
-  { type: "numeric", answer: "760707" },
-  { type: "numeric", answer: "760708" },
-  { type: "numeric", answer: "760709" },
-  { type: "numeric", answer: "170707" },
-  { type: "numeric", answer: "170708" },
-  { type: "numeric", answer: "170709" },
-  { type: "numeric", answer: "933595" },
-  { type: "text", answer: "Ayush" },
-  { type: "text", answer: "Ash" },
-  { type: "text", answer: "AyushxAsh" },
+  { type: "numeric", answer: "123456" },
+  { type: "numeric", answer: "789123" },
+  { type: "numeric", answer: "456789" },
+  { type: "numeric", answer: "123456" },
+  { type: "numeric", answer: "789123" },
+  { type: "numeric", answer: "456789" },
+  { type: "numeric", answer: "123456" },
+  { type: "text", answer: "Tr0ub4dor&3" },
+  { type: "text", answer: "N3on$Vault!99" },
+  { type: "text", answer: "X7#nova_2026*Zq" },
 ].map((s, i) => ({ ...s, t: TRANSITIONS[i % TRANSITIONS.length] }));
 
 const MAX_ATTEMPTS = 5;
@@ -268,6 +268,8 @@ function showVaultError(msg) {
 }
 
 async function loadGallery() {
+  if (!grid.children.length) renderSkeleton();
+
   const { data: rows, error } = await supabase
     .from("photos")
     .select("id, path, created_at")
@@ -299,6 +301,16 @@ async function loadGallery() {
 // ---- Grid: render, fade-in thumbnails, long-press selection ---------------
 let selectionMode = false;
 const selectedIds = new Set();
+
+function renderSkeleton(count = 6) {
+  grid.innerHTML = "";
+  empty.hidden = true;
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement("div");
+    s.className = "skeleton-tile";
+    grid.appendChild(s);
+  }
+}
 
 function renderGrid() {
   grid.innerHTML = "";
