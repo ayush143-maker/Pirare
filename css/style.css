@@ -217,6 +217,22 @@ html, body {
 .tile__check svg { width: 12px; height: 12px; opacity: 0; transition: opacity .15s ease; }
 .tile.selected .tile__check svg { opacity: 1; }
 
+/* ---------------- Loading skeleton ---------------- */
+.skeleton-tile {
+  break-inside: avoid; margin-bottom: 12px; border-radius: 12px;
+  background: linear-gradient(100deg, var(--panel) 30%, var(--panel-2) 50%, var(--panel) 70%);
+  background-size: 300% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-tile:nth-child(4n+1) { height: 190px; }
+.skeleton-tile:nth-child(4n+2) { height: 260px; }
+.skeleton-tile:nth-child(4n+3) { height: 150px; }
+.skeleton-tile:nth-child(4n+4) { height: 220px; }
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .empty { text-align: center; color: var(--text-dim); margin-top: 70px; font-size: 14px; }
 
 /* ---------------- Selection bar ---------------- */
