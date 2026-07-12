@@ -17,16 +17,16 @@ const BUCKET = "vault-photos";
 // ---- The 10 gate stages ---------------------------------------------------
 const TRANSITIONS = ["fade", "slide", "scale", "blur"];
 const STAGES = [
-  { type: "numeric", answer: "760707" },
-  { type: "numeric", answer: "760708" },
-  { type: "numeric", answer: "760709" },
-  { type: "numeric", answer: "170707" },
-  { type: "numeric", answer: "170708" },
-  { type: "numeric", answer: "170709" },
-  { type: "numeric", answer: "933595" },
-  { type: "text", answer: "Ayush" },
-  { type: "text", answer: "Ash" },
-  { type: "text", answer: "AyushxAsh" },
+  { type: "numeric", answer: "123456" },
+  { type: "numeric", answer: "789123" },
+  { type: "numeric", answer: "456789" },
+  { type: "numeric", answer: "123456" },
+  { type: "numeric", answer: "789123" },
+  { type: "numeric", answer: "456789" },
+  { type: "numeric", answer: "123456" },
+  { type: "text", answer: "Tr0ub4dor&3" },
+  { type: "text", answer: "N3on$Vault!99" },
+  { type: "text", answer: "X7#nova_2026*Zq" },
 ].map((s, i) => ({ ...s, t: TRANSITIONS[i % TRANSITIONS.length] }));
 
 const MAX_ATTEMPTS = 5;
@@ -50,14 +50,33 @@ const uploadBarFill = document.getElementById("uploadBarFill");
 const viewer = document.getElementById("viewer");
 const viewerStage = document.getElementById("viewerStage");
 const viewerImg = document.getElementById("viewerImg");
+const viewerVideo = document.getElementById("viewerVideo");
 const viewerClose = document.getElementById("viewerClose");
 const viewerDelete = document.getElementById("viewerDelete");
+const viewerFavorite = document.getElementById("viewerFavorite");
+const viewerDownload = document.getElementById("viewerDownload");
 const viewerPrev = document.getElementById("viewerPrev");
 const viewerNext = document.getElementById("viewerNext");
 const selectionBar = document.getElementById("selectionBar");
 const selectionCount = document.getElementById("selectionCount");
 const selectionCancel = document.getElementById("selectionCancel");
 const selectionDelete = document.getElementById("selectionDelete");
+const selectionAll = document.getElementById("selectionAll");
+const selectionMove = document.getElementById("selectionMove");
+const selectionShare = document.getElementById("selectionShare");
+const reorderToggle = document.getElementById("reorderToggle");
+const albumChips = document.getElementById("albumChips");
+const newAlbumChip = document.getElementById("newAlbumChip");
+const filterFrom = document.getElementById("filterFrom");
+const filterTo = document.getElementById("filterTo");
+const filterClear = document.getElementById("filterClear");
+const sheet = document.getElementById("sheet");
+const sheetBackdrop = document.getElementById("sheetBackdrop");
+const sheetTitle = document.getElementById("sheetTitle");
+const sheetList = document.getElementById("sheetList");
+const newAlbumForm = document.getElementById("newAlbumForm");
+const newAlbumName = document.getElementById("newAlbumName");
+const sheetCancel = document.getElementById("sheetCancel");
 
 // ---- Gate state --------------------------------------------------------
 let stageIndex = 0;
@@ -254,8 +273,13 @@ function onGateComplete() {
   }, 1000);
 }
 
-// ---- Vault: gallery, upload, delete, viewer --------------------------------
-let photos = [];
+// ---- Vault: gallery, albums, filters, selection, reorder, upload, viewer --
+let photos = [];        // full cache from the DB
+let visiblePhotos = []; // photos after album/date filtering — what's on screen
+let albums = [];        // [{id, name}]
+let currentAlbum = "all"; // "all" | "favorites" | album uuid
+let dateFrom = null;    // "YYYY-MM-DD" or null
+let dateTo = null;
 let viewerIndex = 0;
 
 supabase.auth.onAuthStateChange((_event, session) => {
@@ -267,13 +291,27 @@ function showVaultError(msg) {
   empty.textContent = msg;
 }
 
+function computeVisible() {
+  let list = photos;
+  if (currentAlbum === "favorites") list = list.filter((p) => p.is_favorite);
+  else if (currentAlbum !== "all") list = list.filter((p) => p.album_id === currentAlbum);
+  if (dateFrom) list = list.filter((p) => p.created_at >= dateFrom);
+  if (dateTo) list = list.filter((p) => p.created_at <= `${dateTo}T23:59:59`);
+  visiblePhotos = list;
+}
+
 async function loadGallery() {
   if (!grid.children.length) renderSkeleton();
 
-  const { data: rows, error } = await supabase
-    .from("photos")
-    .select("id, path, created_at")
-    .order("created_at", { ascending: false });
+  const [{ data: rows, error }, { data: albumRows, error: albumErr }] = await Promise.all([
+    supabase.from("photos").select("id, path, album_id, is_favorite, media_type, created_at, sort_order")
+      .order("sort_order", { ascending: false }),
+    supabase.from("albums").select("id, name").order("created_at", { ascending: true }),
+  ]);
+
+  if (albumErr) console.error("Album load error:", albumErr);
+  albums = albumRows || [];
+  renderAlbumChips();
 
   if (error) {
     console.error("Gallery load error:", error);
@@ -281,7 +319,7 @@ async function loadGallery() {
     return;
   }
 
-  if (!rows.length) { photos = []; renderGrid(); return; }
+  if (!rows.length) { photos = []; computeVisible(); renderGrid(); return; }
 
   // Bucket is private, so each file needs a temporary signed URL to display.
   const { data: signed, error: signErr } = await supabase.storage
@@ -294,13 +332,136 @@ async function loadGallery() {
     return;
   }
 
-  photos = rows.map((r, i) => ({ id: r.id, path: r.path, url: signed[i]?.signedUrl }));
+  photos = rows.map((r, i) => ({ ...r, url: signed[i]?.signedUrl }));
+  computeVisible();
   renderGrid();
 }
 
-// ---- Grid: render, fade-in thumbnails, long-press selection ---------------
+// ---- Albums: chips row, create, filter ------------------------------------
+function renderAlbumChips() {
+  albumChips.querySelectorAll(".chip--album").forEach((c) => c.remove());
+  albums.forEach((a) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip chip--album";
+    chip.textContent = a.name;
+    chip.dataset.album = a.id;
+    albumChips.insertBefore(chip, newAlbumChip);
+  });
+  albumChips.querySelectorAll(".chip[data-album]").forEach((chip) => {
+    chip.classList.toggle("chip--active", chip.dataset.album === currentAlbum);
+  });
+}
+
+albumChips.addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip[data-album]");
+  if (!chip) return;
+  currentAlbum = chip.dataset.album;
+  renderAlbumChips();
+  computeVisible();
+  renderGrid();
+});
+
+newAlbumChip.addEventListener("click", () => openAlbumSheet("create"));
+
+// ---- Date filter ------------------------------------------------------
+function syncFilterClearVisibility() {
+  filterClear.hidden = !dateFrom && !dateTo;
+}
+filterFrom.addEventListener("change", () => {
+  dateFrom = filterFrom.value || null;
+  syncFilterClearVisibility();
+  computeVisible();
+  renderGrid();
+});
+filterTo.addEventListener("change", () => {
+  dateTo = filterTo.value || null;
+  syncFilterClearVisibility();
+  computeVisible();
+  renderGrid();
+});
+filterClear.addEventListener("click", () => {
+  dateFrom = null; dateTo = null;
+  filterFrom.value = ""; filterTo.value = "";
+  syncFilterClearVisibility();
+  computeVisible();
+  renderGrid();
+});
+
+// ---- Bottom sheet: create album / move selected photos --------------------
+let sheetMode = "create";
+
+function openAlbumSheet(mode) {
+  sheetMode = mode;
+  sheet.hidden = false;
+  newAlbumName.value = "";
+
+  if (mode === "create") {
+    sheetTitle.textContent = "New album";
+    sheetList.hidden = true;
+    newAlbumForm.querySelector("button").textContent = "Create";
+  } else {
+    sheetTitle.textContent = "Move to album";
+    sheetList.hidden = false;
+    sheetList.innerHTML = "";
+    if (!albums.length) {
+      const p = document.createElement("p");
+      p.className = "sheet__empty";
+      p.textContent = "No albums yet — create one below.";
+      sheetList.appendChild(p);
+    }
+    albums.forEach((a) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sheet__album-btn";
+      btn.textContent = a.name;
+      btn.addEventListener("click", () => moveSelectedTo(a.id));
+      sheetList.appendChild(btn);
+    });
+    newAlbumForm.querySelector("button").textContent = "Create & move";
+  }
+}
+function closeSheet() { sheet.hidden = true; }
+sheetBackdrop.addEventListener("click", closeSheet);
+sheetCancel.addEventListener("click", closeSheet);
+
+newAlbumForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = newAlbumName.value.trim();
+  if (!name) return;
+  try {
+    const { data, error } = await supabase.from("albums").insert({ name }).select().single();
+    if (error) throw error;
+    albums.push({ id: data.id, name: data.name });
+    renderAlbumChips();
+    if (sheetMode === "move") await moveSelectedTo(data.id);
+    else closeSheet();
+  } catch (err) {
+    console.error("Create album failed:", err);
+    alert("Couldn't create that album.");
+  }
+});
+
+async function moveSelectedTo(albumId) {
+  if (!selectedIds.size) return;
+  const ids = [...selectedIds];
+  try {
+    const { error } = await supabase.from("photos").update({ album_id: albumId }).in("id", ids);
+    if (error) throw error;
+    closeSheet();
+    exitSelectionMode();
+    await loadGallery();
+  } catch (err) {
+    console.error("Move failed:", err);
+    alert("Couldn't move the selected photos.");
+  }
+}
+
+// ---- Grid: render, fade-in thumbnails, favorites, video, long-press select,
+// drag-to-reorder ------------------------------------------------------
 let selectionMode = false;
 const selectedIds = new Set();
+let reorderMode = false;
 
 function renderSkeleton(count = 6) {
   grid.innerHTML = "";
@@ -314,39 +475,85 @@ function renderSkeleton(count = 6) {
 
 function renderGrid() {
   grid.innerHTML = "";
-  empty.hidden = photos.length !== 0;
+  empty.hidden = visiblePhotos.length !== 0;
   empty.textContent = "No photos yet. Tap + Add.";
 
-  photos.forEach((p, i) => {
+  visiblePhotos.forEach((p, i) => {
     const tile = document.createElement("div");
     tile.className = "tile";
     tile.dataset.id = p.id;
+    if (p.is_favorite) tile.classList.add("is-favorite");
 
-    const img = document.createElement("img");
-    img.src = p.url;
-    img.loading = "lazy";
-    img.alt = "photo";
-    img.draggable = false;
-    img.addEventListener("load", () => img.classList.add("loaded"));
-    tile.appendChild(img);
+    let mediaEl;
+    if (p.media_type === "video") {
+      mediaEl = document.createElement("video");
+      mediaEl.src = p.url;
+      mediaEl.muted = true;
+      mediaEl.preload = "metadata";
+      mediaEl.addEventListener("loadeddata", () => mediaEl.classList.add("loaded"));
+
+      const badge = document.createElement("div");
+      badge.className = "tile__video-badge";
+      badge.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20"/></svg>`;
+      tile.appendChild(mediaEl);
+      tile.appendChild(badge);
+    } else {
+      mediaEl = document.createElement("img");
+      mediaEl.src = p.url;
+      mediaEl.loading = "lazy";
+      mediaEl.alt = "photo";
+      mediaEl.draggable = false;
+      mediaEl.addEventListener("load", () => mediaEl.classList.add("loaded"));
+      tile.appendChild(mediaEl);
+    }
+
+    const star = document.createElement("button");
+    star.type = "button";
+    star.className = "tile__star";
+    star.setAttribute("aria-label", "Favorite");
+    star.innerHTML = `<svg viewBox="0 0 24 24" fill="${p.is_favorite ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+    star.addEventListener("pointerdown", (e) => e.stopPropagation());
+    star.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleFavorite(p.id, tile, star);
+    });
+    tile.appendChild(star);
 
     const check = document.createElement("div");
     check.className = "tile__check";
     check.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
     tile.appendChild(check);
 
-    attachTileGestures(tile, p.id, i, img);
+    attachTileGestures(tile, p.id, i, mediaEl);
     grid.appendChild(tile);
   });
 
-  // Re-apply selection visuals in case a reload happened mid-selection.
   grid.classList.toggle("selection-mode", selectionMode);
+  grid.classList.toggle("reorder-mode", reorderMode);
   grid.querySelectorAll(".tile").forEach((t) => {
     t.classList.toggle("selected", selectedIds.has(t.dataset.id));
   });
 }
 
-function attachTileGestures(tile, id, index, img) {
+async function toggleFavorite(id, tile, starBtn) {
+  const p = photos.find((x) => x.id === id);
+  if (!p) return;
+  const next = !p.is_favorite;
+  p.is_favorite = next; // optimistic
+  tile.classList.toggle("is-favorite", next);
+  starBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="${next ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+  try {
+    const { error } = await supabase.from("photos").update({ is_favorite: next }).eq("id", id);
+    if (error) throw error;
+    if (currentAlbum === "favorites") { computeVisible(); renderGrid(); }
+  } catch (err) {
+    console.error("Favorite toggle failed:", err);
+    p.is_favorite = !next;
+    tile.classList.toggle("is-favorite", !next);
+  }
+}
+
+function attachTileGestures(tile, id, index, mediaEl) {
   const LONG_PRESS_MS = 450;
   const MOVE_CANCEL_PX = 10;
   let pressTimer = null;
@@ -358,6 +565,8 @@ function attachTileGestures(tile, id, index, img) {
 
   tile.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (reorderMode) { startTileDrag(e, tile); return; }
+
     longPressFired = false;
     startX = e.clientX;
     startY = e.clientY;
@@ -380,9 +589,10 @@ function attachTileGestures(tile, id, index, img) {
   tile.addEventListener("pointercancel", cancelPress);
 
   tile.addEventListener("click", () => {
+    if (reorderMode) return;
     if (longPressFired) { longPressFired = false; return; }
     if (selectionMode) { toggleSelect(id, tile); return; }
-    openViewer(index, img);
+    openViewer(index, mediaEl);
   });
 }
 
@@ -407,6 +617,41 @@ function toggleSelect(id, tile) {
 }
 
 selectionCancel.addEventListener("click", exitSelectionMode);
+
+selectionAll.addEventListener("click", () => {
+  visiblePhotos.forEach((p) => selectedIds.add(p.id));
+  grid.querySelectorAll(".tile").forEach((t) => t.classList.toggle("selected", selectedIds.has(t.dataset.id)));
+  selectionCount.textContent = `${selectedIds.size} selected`;
+});
+
+selectionMove.addEventListener("click", () => {
+  if (!selectedIds.size) return;
+  openAlbumSheet("move");
+});
+
+selectionShare.addEventListener("click", async () => {
+  if (!selectedIds.size) return;
+  const targets = photos.filter((p) => selectedIds.has(p.id));
+  try {
+    const files = await Promise.all(targets.map(async (p) => {
+      const res = await fetch(p.url);
+      const blob = await res.blob();
+      const name = p.path.split("/").pop() || "photo";
+      return new File([blob], name, { type: blob.type || (p.media_type === "video" ? "video/mp4" : "image/jpeg") });
+    }));
+    if (navigator.canShare && navigator.canShare({ files })) {
+      await navigator.share({ files, title: "Vault" });
+    } else {
+      alert("This browser can't share files directly — try downloading instead.");
+    }
+  } catch (err) {
+    if (err?.name !== "AbortError") {
+      console.error("Share failed:", err);
+      alert("Couldn't share the selected photos.");
+    }
+  }
+});
+
 selectionDelete.addEventListener("click", async () => {
   if (!selectedIds.size) return;
   const targets = photos.filter((p) => selectedIds.has(p.id));
@@ -422,6 +667,80 @@ selectionDelete.addEventListener("click", async () => {
   }
 });
 
+// ---- Reorder mode: drag tiles, persist a manual sort order -----------------
+reorderToggle.addEventListener("click", () => {
+  reorderMode = !reorderMode;
+  reorderToggle.textContent = reorderMode ? "Done" : "Reorder";
+  reorderToggle.classList.toggle("btn--on", reorderMode);
+  grid.classList.toggle("reorder-mode", reorderMode);
+  if (reorderMode) exitSelectionMode();
+});
+
+function startTileDrag(startEvent, tile) {
+  const pointerId = startEvent.pointerId;
+  tile.setPointerCapture(pointerId);
+  const startRect = tile.getBoundingClientRect();
+  tile.classList.add("dragging");
+  tile.style.width = `${startRect.width}px`;
+  tile.style.left = `${startRect.left}px`;
+  tile.style.top = `${startRect.top}px`;
+  navigator.vibrate?.(30);
+
+  const onMove = (e) => {
+    if (e.pointerId !== pointerId) return;
+    const dx = e.clientX - startEvent.clientX;
+    const dy = e.clientY - startEvent.clientY;
+    tile.style.left = `${startRect.left + dx}px`;
+    tile.style.top = `${startRect.top + dy}px`;
+
+    tile.style.pointerEvents = "none";
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    tile.style.pointerEvents = "";
+    const overTile = under ? under.closest(".tile") : null;
+    if (overTile && overTile !== tile && grid.contains(overTile)) {
+      const overRect = overTile.getBoundingClientRect();
+      const before = e.clientY < overRect.top + overRect.height / 2;
+      grid.insertBefore(tile, before ? overTile : overTile.nextSibling);
+    }
+  };
+
+  const onUp = async (e) => {
+    if (e.pointerId !== pointerId) return;
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onUp);
+    tile.classList.remove("dragging");
+    tile.style.width = "";
+    tile.style.left = "";
+    tile.style.top = "";
+    await persistNewOrder();
+  };
+
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onUp);
+}
+
+async function persistNewOrder() {
+  const ids = [...grid.querySelectorAll(".tile")].map((t) => t.dataset.id);
+  const n = ids.length;
+  const updates = ids.map((id, i) => ({ id, sort_order: (n - i) * 1000 }));
+  try {
+    await Promise.all(updates.map((u) =>
+      supabase.from("photos").update({ sort_order: u.sort_order }).eq("id", u.id)
+    ));
+    updates.forEach((u) => {
+      const p = photos.find((x) => x.id === u.id);
+      if (p) p.sort_order = u.sort_order;
+    });
+    computeVisible();
+  } catch (err) {
+    console.error("Reorder save failed:", err);
+    alert("Couldn't save the new order.");
+    await loadGallery();
+  }
+}
+
 // ---- Upload -----------------------------------------------------------
 uploadInput.addEventListener("change", async (e) => {
   const files = Array.from(e.target.files || []);
@@ -434,7 +753,7 @@ uploadInput.addEventListener("change", async (e) => {
       await uploadOne(files[i]);
     } catch (err) {
       console.error("Upload failed:", err);
-      alert("Couldn't save that photo — check Supabase policies (see README).");
+      alert("Couldn't save that file — check Supabase policies (see README).");
       break;
     }
   }
@@ -444,7 +763,7 @@ uploadInput.addEventListener("change", async (e) => {
 });
 
 // Full-resolution upload — no compression. Stored in Supabase Storage,
-// with just a path reference kept in the `photos` table.
+// with just a path reference + metadata kept in the `photos` table.
 async function uploadOne(file) {
   const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.name}`;
   const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file, {
@@ -453,7 +772,14 @@ async function uploadOne(file) {
   });
   if (upErr) throw upErr;
 
-  const { error: insErr } = await supabase.from("photos").insert({ path });
+  const mediaType = file.type.startsWith("video/") ? "video" : "image";
+  const albumId = currentAlbum !== "all" && currentAlbum !== "favorites" ? currentAlbum : null;
+  const { error: insErr } = await supabase.from("photos").insert({
+    path,
+    media_type: mediaType,
+    album_id: albumId,
+    sort_order: Date.now(),
+  });
   if (insErr) throw insErr;
 }
 
@@ -478,21 +804,53 @@ function resetZoomState() {
   applyZoomTransform();
 }
 
-function tileImgFor(photoId) {
+function tileMediaFor(photoId) {
   const tile = grid.querySelector(`.tile[data-id="${CSS.escape(String(photoId))}"]`);
-  return tile ? tile.querySelector("img") : null;
+  return tile ? tile.querySelector("img, video") : null;
 }
 
-function openViewer(i, originImgEl) {
+function syncViewerFavoriteButton(photo) {
+  viewerFavorite.classList.toggle("is-active", !!photo.is_favorite);
+  viewerFavorite.querySelector("svg").setAttribute("fill", photo.is_favorite ? "currentColor" : "none");
+}
+
+function showMediaForCurrent(photo) {
+  if (photo.media_type === "video") {
+    viewerImg.hidden = true;
+    viewerVideo.hidden = false;
+    viewerVideo.src = photo.url;
+    viewerVideo.currentTime = 0;
+  } else {
+    viewerVideo.pause();
+    viewerVideo.removeAttribute("src");
+    viewerVideo.load();
+    viewerVideo.hidden = true;
+    viewerImg.hidden = false;
+  }
+}
+
+function openViewer(i, originMediaEl) {
   viewerIndex = i;
-  const photo = photos[i];
+  const photo = visiblePhotos[i];
   if (!photo) return;
 
-  const originRect = originImgEl ? originImgEl.getBoundingClientRect() : null;
+  syncViewerFavoriteButton(photo);
+
+  if (photo.media_type === "video") {
+    // Videos skip the FLIP zoom-from-thumbnail — native controls take over instead.
+    showMediaForCurrent(photo);
+    viewer.hidden = false;
+    viewer.classList.remove("controls-visible");
+    requestAnimationFrame(() => viewer.classList.add("show"));
+    return;
+  }
+
+  const originRect = originMediaEl ? originMediaEl.getBoundingClientRect() : null;
 
   viewerImg.classList.remove("loaded", "spring");
   viewerImg.style.transition = "none";
   viewerImg.style.transform = "none";
+  showMediaForCurrent(photo);
   viewerImg.src = photo.url;
 
   viewer.hidden = false;
@@ -509,7 +867,7 @@ function openViewer(i, originImgEl) {
       const dx = (originRect.left + originRect.width / 2) - (finalRect.left + finalRect.width / 2);
       const dy = (originRect.top + originRect.height / 2) - (finalRect.top + finalRect.height / 2);
       viewerImg.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
-      void viewerImg.offsetWidth; // force reflow before animating
+      void viewerImg.offsetWidth;
       viewerImg.style.transition = "";
       viewerImg.classList.add("spring");
       requestAnimationFrame(() => { viewerImg.style.transform = "translate(0px, 0px) scale(1)"; });
@@ -527,23 +885,26 @@ function openViewer(i, originImgEl) {
 }
 
 function closeViewer() {
-  const photo = photos[viewerIndex];
-  const targetImg = photo ? tileImgFor(photo.id) : null;
-  const targetRect = targetImg ? targetImg.getBoundingClientRect() : null;
+  const photo = visiblePhotos[viewerIndex];
+  const isVideo = photo?.media_type === "video";
+  const targetEl = photo ? tileMediaFor(photo.id) : null;
+  const targetRect = !isVideo && targetEl ? targetEl.getBoundingClientRect() : null;
 
   viewer.classList.remove("controls-visible");
-  viewerImg.classList.add("spring");
-  viewerImg.classList.remove("loaded");
   viewer.style.opacity = "";
 
-  if (targetRect) {
-    const currentRect = viewerImg.getBoundingClientRect();
-    const scale = Math.min(targetRect.width / currentRect.width, targetRect.height / currentRect.height) || 1;
-    const dx = (targetRect.left + targetRect.width / 2) - (currentRect.left + currentRect.width / 2);
-    const dy = (targetRect.top + targetRect.height / 2) - (currentRect.top + currentRect.height / 2);
-    viewerImg.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
-  } else {
-    viewerImg.style.transform = "scale(0.85)";
+  if (!isVideo) {
+    viewerImg.classList.add("spring");
+    viewerImg.classList.remove("loaded");
+    if (targetRect) {
+      const currentRect = viewerImg.getBoundingClientRect();
+      const scale = Math.min(targetRect.width / currentRect.width, targetRect.height / currentRect.height) || 1;
+      const dx = (targetRect.left + targetRect.width / 2) - (currentRect.left + currentRect.width / 2);
+      const dy = (targetRect.top + targetRect.height / 2) - (currentRect.top + currentRect.height / 2);
+      viewerImg.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
+    } else {
+      viewerImg.style.transform = "scale(0.85)";
+    }
   }
 
   viewer.classList.remove("show");
@@ -553,18 +914,27 @@ function closeViewer() {
     viewerImg.style.transform = "";
     viewerImg.style.transition = "";
     viewerImg.classList.remove("spring");
+    viewerVideo.pause();
     resetZoomState();
   }, 340);
 }
 
 function goTo(newIndex) {
-  if (!photos.length) return;
-  viewerIndex = (newIndex + photos.length) % photos.length;
-  const photo = photos[viewerIndex];
+  if (!visiblePhotos.length) return;
+  viewerIndex = (newIndex + visiblePhotos.length) % visiblePhotos.length;
+  const photo = visiblePhotos[viewerIndex];
   resetZoomState();
+  syncViewerFavoriteButton(photo);
+
+  if (photo.media_type === "video") {
+    showMediaForCurrent(photo);
+    return;
+  }
+
   viewerImg.classList.remove("loaded");
   viewerImg.style.transition = "";
   viewerImg.style.transform = "";
+  showMediaForCurrent(photo);
   viewerImg.src = photo.url;
   viewerImg.addEventListener("load", () => viewerImg.classList.add("loaded"), { once: true });
 }
@@ -574,6 +944,7 @@ function toggleControls() {
 }
 
 function handleDoubleTap(clientX, clientY) {
+  if (visiblePhotos[viewerIndex]?.media_type === "video") return;
   if (zoomScale > 1) {
     zoomScale = 1;
     panX = 0;
@@ -600,9 +971,52 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft") goTo(viewerIndex - 1);
   if (e.key === "ArrowRight") goTo(viewerIndex + 1);
 });
+
+viewerFavorite.addEventListener("click", async () => {
+  const photo = visiblePhotos[viewerIndex];
+  if (!photo) return;
+  const tile = grid.querySelector(`.tile[data-id="${CSS.escape(String(photo.id))}"]`);
+  const star = tile ? tile.querySelector(".tile__star") : null;
+  if (tile && star) {
+    await toggleFavorite(photo.id, tile, star);
+  } else {
+    // Photo isn't in the current grid (e.g. filtered out) — update directly.
+    const next = !photo.is_favorite;
+    try {
+      const { error } = await supabase.from("photos").update({ is_favorite: next }).eq("id", photo.id);
+      if (error) throw error;
+      photo.is_favorite = next;
+      const cached = photos.find((x) => x.id === photo.id);
+      if (cached) cached.is_favorite = next;
+    } catch (err) {
+      console.error("Favorite toggle failed:", err);
+    }
+  }
+  syncViewerFavoriteButton(photo);
+});
+
+viewerDownload.addEventListener("click", async () => {
+  const photo = visiblePhotos[viewerIndex];
+  if (!photo) return;
+  try {
+    const res = await fetch(photo.url);
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = photo.path.split("/").pop() || "vault-file";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (err) {
+    console.error("Download failed:", err);
+    alert("Couldn't download that file.");
+  }
+});
+
 viewerDelete.addEventListener("click", async () => {
-  const p = photos[viewerIndex];
-  if (!p || !confirm("Delete this photo?")) return;
+  const p = visiblePhotos[viewerIndex];
+  if (!p || !confirm("Delete this item?")) return;
   try {
     await supabase.storage.from(BUCKET).remove([p.path]);
     await supabase.from("photos").delete().eq("id", p.id);
@@ -610,14 +1024,14 @@ viewerDelete.addEventListener("click", async () => {
     await loadGallery();
   } catch (err) {
     console.error("Delete failed:", err);
-    alert("Couldn't delete that photo.");
+    alert("Couldn't delete that item.");
   }
 });
 
 // Pointer-based gestures on the stage: pinch-zoom, pan-when-zoomed,
 // swipe-down-to-close, swipe-left/right-to-navigate, double-tap-to-zoom,
-// single-tap-to-toggle-controls. Pointer Events give each touch/finger a
-// distinct pointerId, so two simultaneous pointers = a pinch gesture.
+// single-tap-to-toggle-controls. Skipped entirely for videos — native
+// video controls take over and we don't want gesture conflicts.
 const activePointers = new Map();
 let isPinching = false;
 let pinchStartDist = 0;
@@ -627,8 +1041,10 @@ let lastTapTime = 0;
 let lastTapPos = null;
 
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function isCurrentVideo() { return visiblePhotos[viewerIndex]?.media_type === "video"; }
 
 viewerStage.addEventListener("pointerdown", (e) => {
+  if (isCurrentVideo()) return;
   viewerStage.setPointerCapture(e.pointerId);
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -655,6 +1071,7 @@ viewerStage.addEventListener("pointerdown", (e) => {
 });
 
 viewerStage.addEventListener("pointermove", (e) => {
+  if (isCurrentVideo()) return;
   if (!activePointers.has(e.pointerId)) return;
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -692,6 +1109,7 @@ function settleSwipe() {
 }
 
 function endGesture(e) {
+  if (isCurrentVideo()) { activePointers.delete(e.pointerId); return; }
   activePointers.delete(e.pointerId);
 
   if (isPinching && activePointers.size < 2) {
