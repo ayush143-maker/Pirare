@@ -9,8 +9,8 @@
   --green-dim: #1e9e51;
   --danger: #ff5566;
   --radius: 16px;
-  --font: -apple-system, "Segoe UI", system-ui, sans-serif;
-  --mono: "SFMono-Regular", Consolas, monospace;
+  --font: "Patrick Hand", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --mono: "Patrick Hand", "SFMono-Regular", Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -207,7 +207,7 @@ html, body {
 .upload-bar { max-width: 400px; margin: 0 auto 16px; height: 6px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
 .upload-bar__fill { height: 100%; width: 0%; background: var(--green); transition: width .2s; }
 
-/* ---------------- Favorite star + video badge on tiles ---------------- */
+/* ---------------- Favorite heart + video badge on tiles ---------------- */
 .tile__star {
   position: absolute; top: 8px; left: 8px; z-index: 2;
   width: 26px; height: 26px; border-radius: 50%;
@@ -217,10 +217,18 @@ html, body {
   transition: transform .2s cubic-bezier(.34,1.56,.64,1), color .2s ease, border-color .2s ease;
 }
 .tile__star:active { transform: scale(0.85); }
-.tile__star svg { width: 13px; height: 13px; }
-.tile.is-favorite .tile__star { color: #ffcc4d; border-color: rgba(255,204,77,0.5); }
-.tile.is-favorite .tile__star svg { fill: #ffcc4d; }
+.tile__star svg { width: 13px; height: 13px; transition: fill .2s ease; }
+.tile.is-favorite .tile__star { color: #ff5c96; border-color: rgba(255,92,150,0.5); }
+.tile.is-favorite .tile__star svg { fill: #ff5c96; }
 .selection-mode .tile__star { display: none; }
+
+.tile__star.bloom svg { animation: heartBloom .5s cubic-bezier(.34,1.56,.64,1); }
+@keyframes heartBloom {
+  0%   { transform: scale(0.55); }
+  45%  { transform: scale(1.4); }
+  70%  { transform: scale(0.9); }
+  100% { transform: scale(1); }
+}
 
 .tile__video-badge {
   position: absolute; bottom: 8px; left: 8px; z-index: 2;
@@ -396,8 +404,9 @@ html, body {
 }
 .viewer__icon-btn:active { transform: scale(0.95); }
 #viewerDelete { color: var(--danger); }
-#viewerFavorite.is-active { color: #ffcc4d; border-color: rgba(255,204,77,0.5); }
-#viewerFavorite.is-active svg { fill: #ffcc4d; }
+#viewerFavorite.is-active { color: #ff5c96; border-color: rgba(255,92,150,0.5); }
+#viewerFavorite.is-active svg { fill: #ff5c96; }
+#viewerFavorite.bloom svg { animation: heartBloom .5s cubic-bezier(.34,1.56,.64,1); }
 @media (hover: hover) {
   .viewer__icon-btn:hover { border-color: var(--green-dim); box-shadow: 0 0 16px rgba(47,227,116,0.25); }
   #viewerDelete:hover { border-color: rgba(255,85,102,0.5); box-shadow: 0 0 16px rgba(255,85,102,0.25); }
