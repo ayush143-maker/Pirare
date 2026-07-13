@@ -17,16 +17,16 @@ const BUCKET = "vault-photos";
 // ---- The 10 gate stages ---------------------------------------------------
 const TRANSITIONS = ["fade", "slide", "scale", "blur"];
 const STAGES = [
-  { type: "numeric", answer: "760707" },
-  { type: "numeric", answer: "760708" },
-  { type: "numeric", answer: "760709" },
-  { type: "numeric", answer: "170707" },
-  { type: "numeric", answer: "170708" },
-  { type: "numeric", answer: "170709" },
-  { type: "numeric", answer: "933595" },
-  { type: "text", answer: "Ayush" },
-  { type: "text", answer: "Ash" },
-  { type: "text", answer: "AyushxAsh" },
+  { type: "numeric", answer: "123456" },
+  { type: "numeric", answer: "789123" },
+  { type: "numeric", answer: "456789" },
+  { type: "numeric", answer: "123456" },
+  { type: "numeric", answer: "789123" },
+  { type: "numeric", answer: "456789" },
+  { type: "numeric", answer: "123456" },
+  { type: "text", answer: "Tr0ub4dor&3" },
+  { type: "text", answer: "N3on$Vault!99" },
+  { type: "text", answer: "X7#nova_2026*Zq" },
 ].map((s, i) => ({ ...s, t: TRANSITIONS[i % TRANSITIONS.length] }));
 
 const MAX_ATTEMPTS = 5;
@@ -63,13 +63,8 @@ const selectionCancel = document.getElementById("selectionCancel");
 const selectionDelete = document.getElementById("selectionDelete");
 const selectionAll = document.getElementById("selectionAll");
 const selectionMove = document.getElementById("selectionMove");
-const selectionShare = document.getElementById("selectionShare");
-const reorderToggle = document.getElementById("reorderToggle");
 const albumChips = document.getElementById("albumChips");
 const newAlbumChip = document.getElementById("newAlbumChip");
-const filterFrom = document.getElementById("filterFrom");
-const filterTo = document.getElementById("filterTo");
-const filterClear = document.getElementById("filterClear");
 const sheet = document.getElementById("sheet");
 const sheetBackdrop = document.getElementById("sheetBackdrop");
 const sheetTitle = document.getElementById("sheetTitle");
@@ -275,11 +270,9 @@ function onGateComplete() {
 
 // ---- Vault: gallery, albums, filters, selection, reorder, upload, viewer --
 let photos = [];        // full cache from the DB
-let visiblePhotos = []; // photos after album/date filtering — what's on screen
+let visiblePhotos = []; // photos after album filtering — what's on screen
 let albums = [];        // [{id, name}]
 let currentAlbum = "all"; // "all" | "favorites" | album uuid
-let dateFrom = null;    // "YYYY-MM-DD" or null
-let dateTo = null;
 let viewerIndex = 0;
 
 supabase.auth.onAuthStateChange((_event, session) => {
@@ -295,8 +288,6 @@ function computeVisible() {
   let list = photos;
   if (currentAlbum === "favorites") list = list.filter((p) => p.is_favorite);
   else if (currentAlbum !== "all") list = list.filter((p) => p.album_id === currentAlbum);
-  if (dateFrom) list = list.filter((p) => p.created_at >= dateFrom);
-  if (dateTo) list = list.filter((p) => p.created_at <= `${dateTo}T23:59:59`);
   visiblePhotos = list;
 }
 
@@ -364,30 +355,6 @@ albumChips.addEventListener("click", (e) => {
 
 newAlbumChip.addEventListener("click", () => openAlbumSheet("create"));
 
-// ---- Date filter ------------------------------------------------------
-function syncFilterClearVisibility() {
-  filterClear.hidden = !dateFrom && !dateTo;
-}
-filterFrom.addEventListener("change", () => {
-  dateFrom = filterFrom.value || null;
-  syncFilterClearVisibility();
-  computeVisible();
-  renderGrid();
-});
-filterTo.addEventListener("change", () => {
-  dateTo = filterTo.value || null;
-  syncFilterClearVisibility();
-  computeVisible();
-  renderGrid();
-});
-filterClear.addEventListener("click", () => {
-  dateFrom = null; dateTo = null;
-  filterFrom.value = ""; filterTo.value = "";
-  syncFilterClearVisibility();
-  computeVisible();
-  renderGrid();
-});
-
 // ---- Bottom sheet: create album / move selected photos --------------------
 let sheetMode = "create";
 
@@ -395,6 +362,7 @@ function openAlbumSheet(mode) {
   sheetMode = mode;
   sheet.hidden = false;
   newAlbumName.value = "";
+  setTimeout(() => newAlbumName.focus(), 50);
 
   if (mode === "create") {
     sheetTitle.textContent = "New album";
@@ -434,8 +402,16 @@ newAlbumForm.addEventListener("submit", async (e) => {
     if (error) throw error;
     albums.push({ id: data.id, name: data.name });
     renderAlbumChips();
-    if (sheetMode === "move") await moveSelectedTo(data.id);
-    else closeSheet();
+    if (sheetMode === "move") {
+      await moveSelectedTo(data.id);
+    } else {
+      // Jump straight into the new (empty) album so it's obvious it worked.
+      closeSheet();
+      currentAlbum = data.id;
+      renderAlbumChips();
+      computeVisible();
+      renderGrid();
+    }
   } catch (err) {
     console.error("Create album failed:", err);
     alert("Couldn't create that album.");
@@ -457,11 +433,9 @@ async function moveSelectedTo(albumId) {
   }
 }
 
-// ---- Grid: render, fade-in thumbnails, favorites, video, long-press select,
-// drag-to-reorder ------------------------------------------------------
+// ---- Grid: render, fade-in thumbnails, favorites, video, long-press select --
 let selectionMode = false;
 const selectedIds = new Set();
-let reorderMode = false;
 
 function renderSkeleton(count = 6) {
   grid.innerHTML = "";
@@ -483,6 +457,7 @@ function renderGrid() {
     tile.className = "tile";
     tile.dataset.id = p.id;
     if (p.is_favorite) tile.classList.add("is-favorite");
+    tile.addEventListener("contextmenu", (e) => e.preventDefault());
 
     let mediaEl;
     if (p.media_type === "video") {
@@ -490,7 +465,9 @@ function renderGrid() {
       mediaEl.src = p.url;
       mediaEl.muted = true;
       mediaEl.preload = "metadata";
+      mediaEl.setAttribute("disablePictureInPicture", "");
       mediaEl.addEventListener("loadeddata", () => mediaEl.classList.add("loaded"));
+      mediaEl.addEventListener("contextmenu", (e) => e.preventDefault());
 
       const badge = document.createElement("div");
       badge.className = "tile__video-badge";
@@ -504,6 +481,7 @@ function renderGrid() {
       mediaEl.alt = "photo";
       mediaEl.draggable = false;
       mediaEl.addEventListener("load", () => mediaEl.classList.add("loaded"));
+      mediaEl.addEventListener("contextmenu", (e) => e.preventDefault());
       tile.appendChild(mediaEl);
     }
 
@@ -529,7 +507,6 @@ function renderGrid() {
   });
 
   grid.classList.toggle("selection-mode", selectionMode);
-  grid.classList.toggle("reorder-mode", reorderMode);
   grid.querySelectorAll(".tile").forEach((t) => {
     t.classList.toggle("selected", selectedIds.has(t.dataset.id));
   });
@@ -565,7 +542,6 @@ function attachTileGestures(tile, id, index, mediaEl) {
 
   tile.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (reorderMode) { startTileDrag(e, tile); return; }
 
     longPressFired = false;
     startX = e.clientX;
@@ -589,7 +565,6 @@ function attachTileGestures(tile, id, index, mediaEl) {
   tile.addEventListener("pointercancel", cancelPress);
 
   tile.addEventListener("click", () => {
-    if (reorderMode) return;
     if (longPressFired) { longPressFired = false; return; }
     if (selectionMode) { toggleSelect(id, tile); return; }
     openViewer(index, mediaEl);
@@ -629,29 +604,6 @@ selectionMove.addEventListener("click", () => {
   openAlbumSheet("move");
 });
 
-selectionShare.addEventListener("click", async () => {
-  if (!selectedIds.size) return;
-  const targets = photos.filter((p) => selectedIds.has(p.id));
-  try {
-    const files = await Promise.all(targets.map(async (p) => {
-      const res = await fetch(p.url);
-      const blob = await res.blob();
-      const name = p.path.split("/").pop() || "photo";
-      return new File([blob], name, { type: blob.type || (p.media_type === "video" ? "video/mp4" : "image/jpeg") });
-    }));
-    if (navigator.canShare && navigator.canShare({ files })) {
-      await navigator.share({ files, title: "Vault" });
-    } else {
-      alert("This browser can't share files directly — try downloading instead.");
-    }
-  } catch (err) {
-    if (err?.name !== "AbortError") {
-      console.error("Share failed:", err);
-      alert("Couldn't share the selected photos.");
-    }
-  }
-});
-
 selectionDelete.addEventListener("click", async () => {
   if (!selectedIds.size) return;
   const targets = photos.filter((p) => selectedIds.has(p.id));
@@ -666,80 +618,6 @@ selectionDelete.addEventListener("click", async () => {
     alert("Couldn't delete the selected photos.");
   }
 });
-
-// ---- Reorder mode: drag tiles, persist a manual sort order -----------------
-reorderToggle.addEventListener("click", () => {
-  reorderMode = !reorderMode;
-  reorderToggle.textContent = reorderMode ? "Done" : "Reorder";
-  reorderToggle.classList.toggle("btn--on", reorderMode);
-  grid.classList.toggle("reorder-mode", reorderMode);
-  if (reorderMode) exitSelectionMode();
-});
-
-function startTileDrag(startEvent, tile) {
-  const pointerId = startEvent.pointerId;
-  tile.setPointerCapture(pointerId);
-  const startRect = tile.getBoundingClientRect();
-  tile.classList.add("dragging");
-  tile.style.width = `${startRect.width}px`;
-  tile.style.left = `${startRect.left}px`;
-  tile.style.top = `${startRect.top}px`;
-  navigator.vibrate?.(30);
-
-  const onMove = (e) => {
-    if (e.pointerId !== pointerId) return;
-    const dx = e.clientX - startEvent.clientX;
-    const dy = e.clientY - startEvent.clientY;
-    tile.style.left = `${startRect.left + dx}px`;
-    tile.style.top = `${startRect.top + dy}px`;
-
-    tile.style.pointerEvents = "none";
-    const under = document.elementFromPoint(e.clientX, e.clientY);
-    tile.style.pointerEvents = "";
-    const overTile = under ? under.closest(".tile") : null;
-    if (overTile && overTile !== tile && grid.contains(overTile)) {
-      const overRect = overTile.getBoundingClientRect();
-      const before = e.clientY < overRect.top + overRect.height / 2;
-      grid.insertBefore(tile, before ? overTile : overTile.nextSibling);
-    }
-  };
-
-  const onUp = async (e) => {
-    if (e.pointerId !== pointerId) return;
-    document.removeEventListener("pointermove", onMove);
-    document.removeEventListener("pointerup", onUp);
-    document.removeEventListener("pointercancel", onUp);
-    tile.classList.remove("dragging");
-    tile.style.width = "";
-    tile.style.left = "";
-    tile.style.top = "";
-    await persistNewOrder();
-  };
-
-  document.addEventListener("pointermove", onMove);
-  document.addEventListener("pointerup", onUp);
-  document.addEventListener("pointercancel", onUp);
-}
-
-async function persistNewOrder() {
-  const ids = [...grid.querySelectorAll(".tile")].map((t) => t.dataset.id);
-  const n = ids.length;
-  const updates = ids.map((id, i) => ({ id, sort_order: (n - i) * 1000 }));
-  try {
-    await Promise.all(updates.map((u) =>
-      supabase.from("photos").update({ sort_order: u.sort_order }).eq("id", u.id)
-    ));
-    updates.forEach((u) => {
-      const p = photos.find((x) => x.id === u.id);
-      if (p) p.sort_order = u.sort_order;
-    });
-    computeVisible();
-  } catch (err) {
-    console.error("Reorder save failed:", err);
-    alert("Couldn't save the new order.");
-    await loadGallery();
-  }
-}
 
 // ---- Upload -----------------------------------------------------------
 uploadInput.addEventListener("change", async (e) => {
