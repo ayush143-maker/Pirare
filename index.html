@@ -34,7 +34,6 @@
     <header class="vault__bar">
       <span class="vault__title">Vault</span>
       <div class="vault__actions">
-        <button class="btn btn--sm btn--ghost" id="reorderToggle">Reorder</button>
         <label class="btn btn--sm">
           + Add
           <input type="file" id="uploadInput" accept="image/*,video/*" multiple hidden />
@@ -48,12 +47,6 @@
         <button class="chip" data-album="favorites">★ Favorites</button>
         <!-- user albums injected here -->
         <button class="chip chip--new" id="newAlbumChip">+ Album</button>
-      </div>
-      <div class="filters">
-        <input type="date" class="date-input" id="filterFrom" />
-        <span class="filters__sep">–</span>
-        <input type="date" class="date-input" id="filterTo" />
-        <button class="chip-x" id="filterClear" hidden aria-label="Clear date filter">✕</button>
       </div>
     </div>
 
@@ -104,7 +97,6 @@
     <div class="selection-bar__actions">
       <button class="chip-btn" id="selectionAll">Select all</button>
       <button class="chip-btn" id="selectionMove">Move</button>
-      <button class="chip-btn" id="selectionShare">Share</button>
       <button class="chip-btn chip-btn--danger" id="selectionDelete">Delete</button>
       <button class="chip-btn" id="selectionCancel">Cancel</button>
     </div>
