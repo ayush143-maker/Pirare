@@ -141,7 +141,6 @@ html, body {
 }
 .btn:active { transform: scale(0.98); }
 .btn--sm { width: auto; padding: 8px 14px; font-size: 13px; }
-.btn--on { background: rgba(47,227,116,0.16); border-color: var(--green); color: var(--green); }
 
 /* correct / wrong states */
 .card.correct { border-color: var(--green-dim); box-shadow: 0 0 0 1px var(--green-dim); }
@@ -205,22 +204,6 @@ html, body {
 .chip--active { background: rgba(47,227,116,0.12); border-color: var(--green-dim); color: var(--green); }
 .chip--new { color: var(--green); border-style: dashed; border-color: var(--green-dim); }
 
-.filters { display: flex; align-items: center; gap: 8px; }
-.date-input {
-  padding: 8px 10px; border-radius: 8px;
-  background: var(--panel-2); border: 1px solid var(--line);
-  color: var(--text); font-size: 12.5px; font-family: var(--mono);
-  color-scheme: dark;
-}
-.filters__sep { color: var(--text-dim); font-size: 12px; }
-.chip-x {
-  width: 26px; height: 26px; border-radius: 50%;
-  background: var(--panel-2); border: 1px solid var(--line);
-  color: var(--text-dim); cursor: pointer; font-size: 11px;
-  transition: transform .2s cubic-bezier(.34,1.56,.64,1);
-}
-.chip-x:active { transform: scale(0.9); }
-
 .upload-bar { max-width: 400px; margin: 0 auto 16px; height: 6px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
 .upload-bar__fill { height: 100%; width: 0%; background: var(--green); transition: width .2s; }
 
@@ -249,16 +232,12 @@ html, body {
 .tile__video-badge svg { width: 11px; height: 11px; margin-left: 1px; }
 .tile video { width: 100%; display: block; background: #000; opacity: 0; transition: opacity .45s ease; }
 .tile video.loaded { opacity: 1; }
-
-/* ---------------- Reorder mode ---------------- */
-.grid.reorder-mode .tile { cursor: grab; }
-.tile.dragging {
-  position: fixed; z-index: 30; pointer-events: none;
-  box-shadow: 0 20px 45px rgba(0,0,0,0.55);
-  transform: scale(1.05);
-  transition: none;
+.tile img, .tile video {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  user-select: none;
 }
-.tile.drop-target { outline: 2px dashed var(--green-dim); outline-offset: 3px; }
 
 /* ---------------- Bottom sheet (album picker / new album) ---------------- */
 .sheet { position: fixed; inset: 0; z-index: 46; display: flex; align-items: flex-end; justify-content: center; }
