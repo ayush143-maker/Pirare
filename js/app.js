@@ -63,8 +63,13 @@ const selectionCancel = document.getElementById("selectionCancel");
 const selectionDelete = document.getElementById("selectionDelete");
 const selectionAll = document.getElementById("selectionAll");
 const selectionMove = document.getElementById("selectionMove");
-const albumChips = document.getElementById("albumChips");
-const newAlbumChip = document.getElementById("newAlbumChip");
+const topChips = document.getElementById("topChips");
+const albumsScreen = document.getElementById("albumsScreen");
+const albumsGrid = document.getElementById("albumsGrid");
+const albumSubbar = document.getElementById("albumSubbar");
+const albumSubbarName = document.getElementById("albumSubbarName");
+const albumBackBtn = document.getElementById("albumBackBtn");
+const addMediaBtn = document.getElementById("addMediaBtn");
 const sheet = document.getElementById("sheet");
 const sheetBackdrop = document.getElementById("sheetBackdrop");
 const sheetTitle = document.getElementById("sheetTitle");
@@ -273,6 +278,7 @@ let photos = [];        // full cache from the DB
 let visiblePhotos = []; // photos after album filtering — what's on screen
 let albums = [];        // [{id, name}]
 let currentAlbum = "all"; // "all" | "favorites" | album uuid
+let showAlbumsScreen = false; // true when the dedicated Albums screen is open
 let viewerIndex = 0;
 
 supabase.auth.onAuthStateChange((_event, session) => {
@@ -291,6 +297,28 @@ function computeVisible() {
   visiblePhotos = list;
 }
 
+// Keeps the three top chips, the album sub-bar, and which screen (Albums
+// grid vs photo grid) is visible all in sync with current state.
+function syncView() {
+  const insideAlbum = !showAlbumsScreen && currentAlbum !== "all" && currentAlbum !== "favorites";
+
+  topChips.querySelectorAll(".chip[data-view]").forEach((chip) => {
+    const v = chip.dataset.view;
+    const active = showAlbumsScreen || insideAlbum ? v === "albums" : v === currentAlbum;
+    chip.classList.toggle("chip--active", active);
+  });
+
+  albumSubbar.hidden = !insideAlbum;
+  if (insideAlbum) {
+    const a = albums.find((x) => x.id === currentAlbum);
+    albumSubbarName.textContent = a ? a.name : "Album";
+  }
+
+  albumsScreen.hidden = !showAlbumsScreen;
+  grid.hidden = showAlbumsScreen;
+  empty.hidden = showAlbumsScreen || visiblePhotos.length !== 0;
+}
+
 async function loadGallery() {
   if (!grid.children.length) renderSkeleton();
 
@@ -302,7 +330,6 @@ async function loadGallery() {
 
   if (albumErr) console.error("Album load error:", albumErr);
   albums = albumRows || [];
-  renderAlbumChips();
 
   if (error) {
     console.error("Gallery load error:", error);
@@ -310,7 +337,14 @@ async function loadGallery() {
     return;
   }
 
-  if (!rows.length) { photos = []; computeVisible(); renderGrid(); return; }
+  if (!rows.length) {
+    photos = [];
+    computeVisible();
+    renderGrid();
+    if (showAlbumsScreen) renderAlbumsScreen();
+    syncView();
+    return;
+  }
 
   // Bucket is private, so each file needs a temporary signed URL to display.
   const { data: signed, error: signErr } = await supabase.storage
@@ -326,34 +360,84 @@ async function loadGallery() {
   photos = rows.map((r, i) => ({ ...r, url: signed[i]?.signedUrl }));
   computeVisible();
   renderGrid();
+  if (showAlbumsScreen) renderAlbumsScreen();
+  syncView();
 }
 
-// ---- Albums: chips row, create, filter ------------------------------------
-function renderAlbumChips() {
-  albumChips.querySelectorAll(".chip--album").forEach((c) => c.remove());
-  albums.forEach((a) => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "chip chip--album";
-    chip.textContent = a.name;
-    chip.dataset.album = a.id;
-    albumChips.insertBefore(chip, newAlbumChip);
-  });
-  albumChips.querySelectorAll(".chip[data-album]").forEach((chip) => {
-    chip.classList.toggle("chip--active", chip.dataset.album === currentAlbum);
-  });
-}
-
-albumChips.addEventListener("click", (e) => {
-  const chip = e.target.closest(".chip[data-album]");
+// ---- Top nav: All / Favorites / Albums -------------------------------
+topChips.addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip[data-view]");
   if (!chip) return;
-  currentAlbum = chip.dataset.album;
-  renderAlbumChips();
-  computeVisible();
-  renderGrid();
+  const view = chip.dataset.view;
+
+  if (view === "albums") {
+    showAlbumsScreen = true;
+    renderAlbumsScreen();
+  } else {
+    showAlbumsScreen = false;
+    currentAlbum = view;
+    computeVisible();
+    renderGrid();
+  }
+  syncView();
 });
 
-newAlbumChip.addEventListener("click", () => openAlbumSheet("create"));
+albumBackBtn.addEventListener("click", () => {
+  showAlbumsScreen = true;
+  renderAlbumsScreen();
+  syncView();
+});
+
+addMediaBtn.addEventListener("click", () => uploadInput.click());
+
+// ---- Albums screen: grid of album cards + "Create New Album" -------------
+function renderAlbumsScreen() {
+  albumsGrid.innerHTML = "";
+
+  const createCard = document.createElement("button");
+  createCard.type = "button";
+  createCard.className = "album-card album-card--create";
+  createCard.innerHTML = `<span class="album-card__plus">+</span><span class="album-card__label">Create New Album</span>`;
+  createCard.addEventListener("click", () => openAlbumSheet("create"));
+  albumsGrid.appendChild(createCard);
+
+  albums.forEach((a) => {
+    const albumPhotos = photos.filter((p) => p.album_id === a.id); // already sort_order desc
+    const cover = albumPhotos[0]?.url;
+
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "album-card";
+
+    const coverEl = document.createElement("div");
+    coverEl.className = "album-card__cover" + (cover ? "" : " album-card__cover--empty");
+    if (cover) coverEl.style.backgroundImage = `url('${cover}')`;
+    else coverEl.textContent = "🖼";
+    card.appendChild(coverEl);
+
+    const meta = document.createElement("div");
+    meta.className = "album-card__meta";
+    const nameEl = document.createElement("span");
+    nameEl.className = "album-card__name";
+    nameEl.textContent = a.name;
+    const countEl = document.createElement("span");
+    countEl.className = "album-card__count";
+    countEl.textContent = `${albumPhotos.length} item${albumPhotos.length === 1 ? "" : "s"}`;
+    meta.appendChild(nameEl);
+    meta.appendChild(countEl);
+    card.appendChild(meta);
+
+    card.addEventListener("click", () => {
+      currentAlbum = a.id;
+      showAlbumsScreen = false;
+      computeVisible();
+      renderGrid();
+      syncView();
+    });
+
+    albumsGrid.appendChild(card);
+  });
+}
 
 // ---- Bottom sheet: create album / move selected photos --------------------
 let sheetMode = "create";
@@ -402,16 +486,16 @@ newAlbumForm.addEventListener("submit", async (e) => {
     const { data, error } = await supabase.from("albums").insert({ name }).select().single();
     if (error) throw error;
     albums.push({ id: data.id, name: data.name });
-    renderAlbumChips();
     if (sheetMode === "move") {
       await moveSelectedTo(data.id);
     } else {
       // Jump straight into the new (empty) album so it's obvious it worked.
       closeSheet();
       currentAlbum = data.id;
-      renderAlbumChips();
+      showAlbumsScreen = false;
       computeVisible();
       renderGrid();
+      syncView();
     }
   } catch (err) {
     console.error("Create album failed:", err);
