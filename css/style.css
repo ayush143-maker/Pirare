@@ -249,7 +249,7 @@ html, body {
   animation: sheetUp .3s cubic-bezier(.22,1.1,.36,1);
 }
 @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-.sheet__title { margin: 0 0 14px; font-size: 15px; }
+.sheet__title { margin: 0 0 14px; font-size: 15px; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .sheet__list { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow-y: auto; margin-bottom: 14px; }
 .sheet__empty { color: var(--text-dim); font-size: 12.5px; padding: 4px 2px 10px; }
 .sheet__album-btn {
