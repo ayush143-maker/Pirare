@@ -490,7 +490,7 @@ function renderGrid() {
     star.type = "button";
     star.className = "tile__star";
     star.setAttribute("aria-label", "Favorite");
-    star.innerHTML = `<svg viewBox="0 0 24 24" fill="${p.is_favorite ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+    star.innerHTML = `<svg viewBox="0 0 24 24" fill="${p.is_favorite ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
     star.addEventListener("pointerdown", (e) => e.stopPropagation());
     star.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -519,7 +519,13 @@ async function toggleFavorite(id, tile, starBtn) {
   const next = !p.is_favorite;
   p.is_favorite = next; // optimistic
   tile.classList.toggle("is-favorite", next);
-  starBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="${next ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+  starBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="${next ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  if (next) {
+    starBtn.classList.remove("bloom");
+    void starBtn.offsetWidth; // restart animation if it's mid-play
+    starBtn.classList.add("bloom");
+    navigator.vibrate?.(25);
+  }
   try {
     const { error } = await supabase.from("photos").update({ is_favorite: next }).eq("id", id);
     if (error) throw error;
@@ -856,6 +862,7 @@ viewerFavorite.addEventListener("click", async () => {
   if (!photo) return;
   const tile = grid.querySelector(`.tile[data-id="${CSS.escape(String(photo.id))}"]`);
   const star = tile ? tile.querySelector(".tile__star") : null;
+  const willBeFavorite = !photo.is_favorite;
   if (tile && star) {
     await toggleFavorite(photo.id, tile, star);
   } else {
@@ -872,6 +879,11 @@ viewerFavorite.addEventListener("click", async () => {
     }
   }
   syncViewerFavoriteButton(photo);
+  if (willBeFavorite) {
+    viewerFavorite.classList.remove("bloom");
+    void viewerFavorite.offsetWidth;
+    viewerFavorite.classList.add("bloom");
+  }
 });
 
 viewerDownload.addEventListener("click", async () => {
