@@ -183,10 +183,10 @@ html, body {
 .vault__title { font-weight: 600; letter-spacing: 1px; }
 .vault__actions { display: flex; gap: 8px; align-items: center; }
 
-/* ---------------- Toolbar: album chips + date filter ---------------- */
+/* ---------------- Toolbar: top nav chips (All / Favorites / Albums) ---------------- */
 .toolbar {
   display: flex; flex-direction: column; gap: 10px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 .chips {
   display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px;
@@ -202,10 +202,69 @@ html, body {
 }
 .chip:active { transform: scale(0.95); }
 .chip--active { background: rgba(47,227,116,0.12); border-color: var(--green-dim); color: var(--green); }
-.chip--new { color: var(--green); border-style: dashed; border-color: var(--green-dim); }
 
 .upload-bar { max-width: 400px; margin: 0 auto 16px; height: 6px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
 .upload-bar__fill { height: 100%; width: 0%; background: var(--green); transition: width .2s; }
+
+/* ---------------- Album sub-bar (shown when browsing inside one album) --- */
+.album-subbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  margin-bottom: 14px;
+  animation: tFade .25s ease;
+}
+.album-subbar__name {
+  flex: 1; font-weight: 600; font-size: 14px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---------------- Albums screen (Samsung-Gallery-inspired, simplified) --- */
+.albums-screen { margin-bottom: 18px; animation: tFade .25s ease; }
+.albums-screen__title { font-size: 19px; margin: 4px 0 14px; }
+.albums-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  max-width: 1100px; margin: 0 auto;
+}
+@media (min-width: 640px) { .albums-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 1000px) { .albums-grid { grid-template-columns: repeat(4, 1fr); } }
+
+.album-card {
+  display: flex; flex-direction: column;
+  border-radius: 16px; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line);
+  padding: 0; cursor: pointer; text-align: left;
+  transition: transform .2s cubic-bezier(.34,1.56,.64,1), border-color .2s ease;
+}
+.album-card:active { transform: scale(0.96); }
+.album-card__cover {
+  aspect-ratio: 1; width: 100%;
+  background-size: cover; background-position: center;
+  background-color: var(--panel-2);
+  display: flex; align-items: center; justify-content: center;
+}
+.album-card__cover--empty { color: var(--text-dim); font-size: 22px; }
+.album-card__meta { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 2px; }
+.album-card__name {
+  font-weight: 600; font-size: 13.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.album-card__count { font-size: 11.5px; color: var(--text-dim); }
+
+.album-card--create {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  aspect-ratio: 1;
+  border-style: dashed; border-color: var(--green-dim);
+  background: rgba(47,227,116,0.05);
+  padding: 12px;
+}
+.album-card--create .album-card__plus {
+  font-size: 34px; color: var(--green); line-height: 1; margin-bottom: 6px;
+}
+.album-card--create .album-card__label {
+  font-size: 12.5px; font-weight: 600; color: var(--green); text-align: center;
+}
 
 /* ---------------- Favorite heart + video badge on tiles ---------------- */
 .tile__star {
@@ -389,7 +448,7 @@ html, body {
   position: fixed; top: 18px; z-index: 3;
   display: flex; gap: 10px;
 }
-.viewer__topbar--left { left: 18px; }
+.viewer__topbar--left { left: 62px; }
 .viewer__topbar--right { right: 18px; }
 .viewer__icon-btn {
   width: 42px; height: 42px; border-radius: 50%;
@@ -404,13 +463,28 @@ html, body {
 }
 .viewer__icon-btn:active { transform: scale(0.95); }
 #viewerDelete { color: var(--danger); }
-#viewerFavorite.is-active { color: #ff5c96; border-color: rgba(255,92,150,0.5); }
-#viewerFavorite.is-active svg { fill: #ff5c96; }
-#viewerFavorite.bloom svg { animation: heartBloom .5s cubic-bezier(.34,1.56,.64,1); }
 @media (hover: hover) {
   .viewer__icon-btn:hover { border-color: var(--green-dim); box-shadow: 0 0 16px rgba(47,227,116,0.25); }
   #viewerDelete:hover { border-color: rgba(255,85,102,0.5); box-shadow: 0 0 16px rgba(255,85,102,0.25); }
 }
+
+/* Favorite heart lives on its own — a small badge over the content itself,
+   same visual language as the grid tile heart, rather than another item in
+   the icon-button row (that's what was making the top bar feel cluttered). */
+.viewer__heart {
+  position: fixed; top: 18px; left: 18px; z-index: 3;
+  width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.4); border: 1px solid rgba(255,92,150,0.35);
+  color: rgba(255,255,255,0.75); cursor: pointer;
+  transition: transform .2s cubic-bezier(.34,1.56,.64,1), color .2s ease, border-color .2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.viewer__heart svg { width: 15px; height: 15px; transition: fill .2s ease; }
+.viewer__heart:active { transform: scale(0.9); }
+.viewer__heart.is-active { color: #ff5c96; border-color: rgba(255,92,150,0.6); background: rgba(0,0,0,0.5); }
+.viewer__heart.is-active svg { fill: #ff5c96; }
+.viewer__heart.bloom svg { animation: heartBloom .5s cubic-bezier(.34,1.56,.64,1); }
 
 .viewer__nav {
   position: fixed; top: 50%; transform: translateY(-50%);
