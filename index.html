@@ -45,17 +45,29 @@
     </header>
 
     <div class="toolbar">
-      <div class="chips" id="albumChips">
-        <button class="chip chip--active" data-album="all">All</button>
-        <button class="chip" data-album="favorites">★ Favorites</button>
-        <!-- user albums injected here -->
-        <button class="chip chip--new" id="newAlbumChip">+ Album</button>
+      <div class="chips" id="topChips">
+        <button class="chip chip--active" data-view="all">All</button>
+        <button class="chip" data-view="favorites">★ Favorites</button>
+        <button class="chip" data-view="albums">Albums</button>
       </div>
+    </div>
+
+    <!-- Shown only when browsing inside one specific album -->
+    <div class="album-subbar" id="albumSubbar" hidden>
+      <button class="chip-x" id="albumBackBtn" aria-label="Back to Albums">‹</button>
+      <span class="album-subbar__name" id="albumSubbarName"></span>
+      <button type="button" class="btn btn--sm" id="addMediaBtn">+ Add Media</button>
     </div>
 
     <div class="upload-bar" id="uploadBar" hidden>
       <div class="upload-bar__fill" id="uploadBarFill"></div>
     </div>
+
+    <!-- ============ Albums screen (Samsung-Gallery-inspired, simplified) ============ -->
+    <section class="albums-screen" id="albumsScreen" hidden>
+      <h2 class="albums-screen__title">Albums</h2>
+      <div class="albums-grid" id="albumsGrid"></div>
+    </section>
 
     <section class="grid" id="grid"></section>
     <p class="empty" id="empty" hidden>No photos yet. Tap + Add.</p>
@@ -63,10 +75,10 @@
 
   <!-- ============ Fullscreen viewer ============ -->
   <div id="viewer" class="viewer" hidden>
+    <button class="viewer__heart" id="viewerFavorite" aria-label="Favorite">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+    </button>
     <div class="viewer__topbar viewer__topbar--left">
-      <button class="viewer__icon-btn" id="viewerFavorite" aria-label="Favorite">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-      </button>
       <button class="viewer__icon-btn" id="viewerDownload" aria-label="Download">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       </button>
