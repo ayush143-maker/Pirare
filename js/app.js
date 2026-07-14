@@ -273,119 +273,187 @@ function onGateComplete() {
   }, 1000);
 }
 
-// ---- Vault: gallery, albums, filters, selection, reorder, upload, viewer --
-let photos = [];        // full cache from the DB
-let visiblePhotos = []; // photos after album filtering — what's on screen
-let albums = [];        // [{id, name}]
-let currentAlbum = "all"; // "all" | "favorites" | album uuid
-let showAlbumsScreen = false; // true when the dedicated Albums screen is open
+// ---- Vault: albums, favorites, selection, upload, viewer ------------------
+// Fetch architecture, by design:
+//   - Startup: fetch the ALBUM LIST only, plus one lightweight cover+count
+//     query per album (never the full photo rows for every album).
+//   - Opening an album or Favorites: fetch that view's photo rows + THUMBNAIL
+//     signed URLs only (a separate, smaller stored file — not the original).
+//   - Opening a photo in the viewer: the thumbnail displays instantly (it's
+//     already in memory), then the full-resolution original is fetched and
+//     swapped in — only for that one photo, only when actually opened.
+let albums = [];            // [{id, name, count, coverUrl}]
+let visiblePhotos = [];     // current view's photos (album contents or favorites)
+let currentView = "albums"; // "albums" | "favorites" | "album"
+let currentAlbumId = null;  // set when currentView === "album"
 let viewerIndex = 0;
 
 supabase.auth.onAuthStateChange((_event, session) => {
-  if (session?.user) loadGallery();
+  if (session?.user) { syncView(); loadAlbumsList(); }
 });
 
 function showVaultError(msg) {
   empty.hidden = false;
   empty.textContent = msg;
 }
-
-function computeVisible() {
-  let list = photos;
-  if (currentAlbum === "favorites") list = list.filter((p) => p.is_favorite);
-  else if (currentAlbum !== "all") list = list.filter((p) => p.album_id === currentAlbum);
-  visiblePhotos = list;
+function showAlbumsError(msg) {
+  albumsGrid.innerHTML = `<p class="sheet__empty">${msg}</p>`;
 }
 
-// Keeps the three top chips, the album sub-bar, and which screen (Albums
-// grid vs photo grid) is visible all in sync with current state.
+// Keeps the two top chips, the album sub-bar, and which screen (Albums grid
+// vs photo grid) is visible all in sync with current state.
 function syncView() {
-  const insideAlbum = !showAlbumsScreen && currentAlbum !== "all" && currentAlbum !== "favorites";
-
   topChips.querySelectorAll(".chip[data-view]").forEach((chip) => {
     const v = chip.dataset.view;
-    const active = showAlbumsScreen || insideAlbum ? v === "albums" : v === currentAlbum;
+    const active = currentView === "album" ? v === "albums" : v === currentView;
     chip.classList.toggle("chip--active", active);
   });
 
+  const insideAlbum = currentView === "album";
   albumSubbar.hidden = !insideAlbum;
   if (insideAlbum) {
-    const a = albums.find((x) => x.id === currentAlbum);
+    const a = albums.find((x) => x.id === currentAlbumId);
     albumSubbarName.textContent = a ? a.name : "Album";
   }
 
-  albumsScreen.hidden = !showAlbumsScreen;
-  grid.hidden = showAlbumsScreen;
-  empty.hidden = showAlbumsScreen || visiblePhotos.length !== 0;
+  const onAlbumsScreen = currentView === "albums";
+  albumsScreen.hidden = !onAlbumsScreen;
+  grid.hidden = onAlbumsScreen;
+  empty.hidden = onAlbumsScreen || visiblePhotos.length !== 0;
 }
 
-async function loadGallery() {
-  if (!grid.children.length) renderSkeleton();
+function reloadCurrentView() {
+  if (currentView === "favorites") return loadFavorites();
+  if (currentView === "album" && currentAlbumId) return loadAlbumContents(currentAlbumId);
+  return loadAlbumsList();
+}
 
-  const [{ data: rows, error }, { data: albumRows, error: albumErr }] = await Promise.all([
-    supabase.from("photos").select("id, path, album_id, is_favorite, media_type, created_at, sort_order")
-      .order("sort_order", { ascending: false }),
-    supabase.from("albums").select("id, name").order("created_at", { ascending: true }),
-  ]);
-
-  if (albumErr) console.error("Album load error:", albumErr);
-  albums = albumRows || [];
+// ---- Startup: album list + one cheap cover+count query per album ----------
+async function loadAlbumsList() {
+  const { data: albumRows, error } = await supabase
+    .from("albums").select("id, name").order("created_at", { ascending: true });
 
   if (error) {
-    console.error("Gallery load error:", error);
-    showVaultError("Can't load photos — check Supabase table policies (see README).");
+    console.error("Album list load error:", error);
+    showAlbumsError("Can't load albums — check Supabase table policies (see README).");
     return;
   }
 
-  if (!rows.length) {
-    photos = [];
-    computeVisible();
-    renderGrid();
-    if (showAlbumsScreen) renderAlbumsScreen();
-    syncView();
+  albums = (albumRows || []).map((a) => ({ ...a, count: 0, coverUrl: null }));
+  renderAlbumsScreen(); // names visible immediately, covers fill in below
+
+  await Promise.all(albums.map(async (a) => {
+    try {
+      // .limit(1) with { count: "exact" } fetches exactly one row (for the
+      // cover) while still returning the true total count of matching rows —
+      // one cheap query per album, never that album's full contents.
+      const { data, count, error: covErr } = await supabase
+        .from("photos")
+        .select("id, path, thumb_path", { count: "exact" })
+        .eq("album_id", a.id)
+        .order("sort_order", { ascending: false })
+        .limit(1);
+      if (covErr) throw covErr;
+
+      a.count = count || 0;
+      const row = data?.[0];
+      if (row) {
+        const key = row.thumb_path || row.path;
+        const { data: signed, error: signErr } = await supabase.storage.from(BUCKET).createSignedUrl(key, 3600);
+        if (!signErr) a.coverUrl = signed.signedUrl;
+      }
+    } catch (err) {
+      console.error(`Cover load failed for album "${a.name}":`, err);
+    }
+  }));
+
+  if (currentView === "albums") renderAlbumsScreen();
+}
+
+// ---- Opening an album: fetch that album's rows + thumbnail URLs only -----
+async function loadAlbumContents(albumId) {
+  if (!grid.children.length) renderSkeleton();
+
+  const { data: rows, error } = await supabase
+    .from("photos")
+    .select("id, path, thumb_path, album_id, is_favorite, media_type, created_at, sort_order")
+    .eq("album_id", albumId)
+    .order("sort_order", { ascending: false });
+
+  if (error) {
+    console.error("Album contents load error:", error);
+    showVaultError("Can't load this album — check Supabase table policies (see README).");
     return;
   }
+  if (!rows.length) { visiblePhotos = []; renderGrid(); syncView(); return; }
 
-  // Bucket is private, so each file needs a temporary signed URL to display.
-  const { data: signed, error: signErr } = await supabase.storage
-    .from(BUCKET)
-    .createSignedUrls(rows.map((r) => r.path), 3600);
-
+  const thumbKeys = rows.map((r) => r.thumb_path || r.path);
+  const { data: signed, error: signErr } = await supabase.storage.from(BUCKET).createSignedUrls(thumbKeys, 3600);
   if (signErr) {
     console.error("Signed URL error:", signErr);
-    showVaultError("Can't load photos — check Supabase storage policies (see README).");
+    showVaultError("Can't load thumbnails — check Supabase storage policies (see README).");
     return;
   }
 
-  photos = rows.map((r, i) => ({ ...r, url: signed[i]?.signedUrl }));
-  computeVisible();
+  visiblePhotos = rows.map((r, i) => ({ ...r, url: signed[i]?.signedUrl }));
   renderGrid();
-  if (showAlbumsScreen) renderAlbumsScreen();
   syncView();
 }
 
-// ---- Top nav: All / Favorites / Albums -------------------------------
+// ---- Favorites: metadata + thumbnails for favorited items only -----------
+async function loadFavorites() {
+  if (!grid.children.length) renderSkeleton();
+
+  const { data: rows, error } = await supabase
+    .from("photos")
+    .select("id, path, thumb_path, album_id, is_favorite, media_type, created_at, sort_order")
+    .eq("is_favorite", true)
+    .order("sort_order", { ascending: false });
+
+  if (error) {
+    console.error("Favorites load error:", error);
+    showVaultError("Can't load favorites — check Supabase table policies (see README).");
+    return;
+  }
+  if (!rows.length) { visiblePhotos = []; renderGrid(); syncView(); return; }
+
+  const thumbKeys = rows.map((r) => r.thumb_path || r.path);
+  const { data: signed, error: signErr } = await supabase.storage.from(BUCKET).createSignedUrls(thumbKeys, 3600);
+  if (signErr) {
+    console.error("Signed URL error:", signErr);
+    showVaultError("Can't load thumbnails — check Supabase storage policies (see README).");
+    return;
+  }
+
+  visiblePhotos = rows.map((r, i) => ({ ...r, url: signed[i]?.signedUrl }));
+  renderGrid();
+  syncView();
+}
+
+// ---- Top nav: Albums / Favorites -------------------------------------
 topChips.addEventListener("click", (e) => {
   const chip = e.target.closest(".chip[data-view]");
   if (!chip) return;
   const view = chip.dataset.view;
 
   if (view === "albums") {
-    showAlbumsScreen = true;
+    currentView = "albums";
+    currentAlbumId = null;
+    syncView();
     renderAlbumsScreen();
-  } else {
-    showAlbumsScreen = false;
-    currentAlbum = view;
-    computeVisible();
-    renderGrid();
+  } else if (view === "favorites") {
+    currentView = "favorites";
+    currentAlbumId = null;
+    syncView();
+    loadFavorites();
   }
-  syncView();
 });
 
 albumBackBtn.addEventListener("click", () => {
-  showAlbumsScreen = true;
-  renderAlbumsScreen();
+  currentView = "albums";
+  currentAlbumId = null;
   syncView();
+  renderAlbumsScreen();
 });
 
 addMediaBtn.addEventListener("click", () => uploadInput.click());
@@ -402,16 +470,13 @@ function renderAlbumsScreen() {
   albumsGrid.appendChild(createCard);
 
   albums.forEach((a) => {
-    const albumPhotos = photos.filter((p) => p.album_id === a.id); // already sort_order desc
-    const cover = albumPhotos[0]?.url;
-
     const card = document.createElement("button");
     card.type = "button";
     card.className = "album-card";
 
     const coverEl = document.createElement("div");
-    coverEl.className = "album-card__cover" + (cover ? "" : " album-card__cover--empty");
-    if (cover) coverEl.style.backgroundImage = `url('${cover}')`;
+    coverEl.className = "album-card__cover" + (a.coverUrl ? "" : " album-card__cover--empty");
+    if (a.coverUrl) coverEl.style.backgroundImage = `url('${a.coverUrl}')`;
     else coverEl.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>`;
     card.appendChild(coverEl);
 
@@ -422,17 +487,16 @@ function renderAlbumsScreen() {
     nameEl.textContent = a.name;
     const countEl = document.createElement("span");
     countEl.className = "album-card__count";
-    countEl.textContent = `${albumPhotos.length} item${albumPhotos.length === 1 ? "" : "s"}`;
+    countEl.textContent = `${a.count} item${a.count === 1 ? "" : "s"}`;
     meta.appendChild(nameEl);
     meta.appendChild(countEl);
     card.appendChild(meta);
 
     card.addEventListener("click", () => {
-      currentAlbum = a.id;
-      showAlbumsScreen = false;
-      computeVisible();
-      renderGrid();
+      currentView = "album";
+      currentAlbumId = a.id;
       syncView();
+      loadAlbumContents(a.id);
     });
 
     albumsGrid.appendChild(card);
@@ -485,17 +549,16 @@ newAlbumForm.addEventListener("submit", async (e) => {
   try {
     const { data, error } = await supabase.from("albums").insert({ name }).select().single();
     if (error) throw error;
-    albums.push({ id: data.id, name: data.name });
+    albums.push({ id: data.id, name: data.name, count: 0, coverUrl: null });
     if (sheetMode === "move") {
       await moveSelectedTo(data.id);
     } else {
       // Jump straight into the new (empty) album so it's obvious it worked.
       closeSheet();
-      currentAlbum = data.id;
-      showAlbumsScreen = false;
-      computeVisible();
-      renderGrid();
+      currentView = "album";
+      currentAlbumId = data.id;
       syncView();
+      loadAlbumContents(data.id);
     }
   } catch (err) {
     console.error("Create album failed:", err);
@@ -511,14 +574,14 @@ async function moveSelectedTo(albumId) {
     if (error) throw error;
     closeSheet();
     exitSelectionMode();
-    await loadGallery();
+    await reloadCurrentView();
   } catch (err) {
     console.error("Move failed:", err);
     alert("Couldn't move the selected photos.");
   }
 }
 
-// ---- Grid: render, fade-in thumbnails, favorites, video, long-press select --
+// ---- Grid: render, fade-in thumbnails, long-press select -------------------
 let selectionMode = false;
 const selectedIds = new Set();
 
@@ -547,7 +610,7 @@ function renderGrid() {
     let mediaEl;
     if (p.media_type === "video") {
       mediaEl = document.createElement("video");
-      mediaEl.src = p.url;
+      mediaEl.src = p.url; // metadata-only preload below keeps this cheap
       mediaEl.muted = true;
       mediaEl.preload = "metadata";
       mediaEl.setAttribute("disablePictureInPicture", "");
@@ -561,7 +624,7 @@ function renderGrid() {
       tile.appendChild(badge);
     } else {
       mediaEl = document.createElement("img");
-      mediaEl.src = p.url;
+      mediaEl.src = p.url; // thumbnail — the original is never touched here
       mediaEl.loading = "lazy";
       mediaEl.alt = "photo";
       mediaEl.draggable = false;
@@ -583,30 +646,6 @@ function renderGrid() {
   grid.querySelectorAll(".tile").forEach((t) => {
     t.classList.toggle("selected", selectedIds.has(t.dataset.id));
   });
-}
-
-async function toggleFavorite(id, tile, starBtn) {
-  const p = photos.find((x) => x.id === id);
-  if (!p) return;
-  const next = !p.is_favorite;
-  p.is_favorite = next; // optimistic
-  tile.classList.toggle("is-favorite", next);
-  starBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="${next ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-  if (next) {
-    starBtn.classList.remove("bloom");
-    void starBtn.offsetWidth; // restart animation if it's mid-play
-    starBtn.classList.add("bloom");
-    navigator.vibrate?.(25);
-  }
-  try {
-    const { error } = await supabase.from("photos").update({ is_favorite: next }).eq("id", id);
-    if (error) throw error;
-    if (currentAlbum === "favorites") { computeVisible(); renderGrid(); }
-  } catch (err) {
-    console.error("Favorite toggle failed:", err);
-    p.is_favorite = !next;
-    tile.classList.toggle("is-favorite", !next);
-  }
 }
 
 function attachTileGestures(tile, id, index, mediaEl) {
@@ -685,24 +724,31 @@ selectionMove.addEventListener("click", () => {
 
 selectionDelete.addEventListener("click", async () => {
   if (!selectedIds.size) return;
-  const targets = photos.filter((p) => selectedIds.has(p.id));
+  const targets = visiblePhotos.filter((p) => selectedIds.has(p.id));
   if (!confirm(`Delete ${targets.length} photo(s)?`)) return;
+  const filesToRemove = targets.flatMap((p) => [p.path, p.thumb_path].filter(Boolean));
   try {
-    await supabase.storage.from(BUCKET).remove(targets.map((p) => p.path));
+    await supabase.storage.from(BUCKET).remove(filesToRemove);
     await supabase.from("photos").delete().in("id", targets.map((p) => p.id));
     exitSelectionMode();
-    await loadGallery();
+    await reloadCurrentView();
   } catch (err) {
     console.error("Bulk delete failed:", err);
     alert("Couldn't delete the selected photos.");
   }
 });
 
-// ---- Upload -----------------------------------------------------------
+// ---- Upload: only allowed inside an open album (nowhere else to file it) --
 uploadInput.addEventListener("change", async (e) => {
   const files = Array.from(e.target.files || []);
   e.target.value = "";
   if (!files.length) return;
+
+  if (currentView !== "album" || !currentAlbumId) {
+    alert("Open an album first, then add photos or videos to it.");
+    return;
+  }
+
   uploadBar.hidden = false;
   for (let i = 0; i < files.length; i++) {
     uploadBarFill.style.width = `${Math.round((i / files.length) * 100)}%`;
@@ -715,26 +761,68 @@ uploadInput.addEventListener("change", async (e) => {
     }
   }
   uploadBarFill.style.width = "100%";
-  await loadGallery();
+  await loadAlbumContents(currentAlbumId);
   setTimeout(() => (uploadBar.hidden = true), 250);
 });
 
-// Full-resolution upload — no compression. Stored in Supabase Storage,
-// with just a path reference + metadata kept in the `photos` table.
+// Full-resolution original, uploaded as-is — plus a small compressed
+// thumbnail generated right in the browser for images, so the grid never
+// has to move original-sized bytes. Videos keep their single stored file;
+// the grid's <video preload="metadata"> already avoids pulling full bytes.
+function makeThumbnail(file) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) { resolve(null); return; }
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read file"));
+    reader.onload = () => { img.src = reader.result; };
+    img.onerror = () => reject(new Error("Couldn't decode image"));
+    img.onload = () => {
+      const maxDim = 480;
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.72);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 async function uploadOne(file) {
-  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.name}`;
+  const base = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.name}`;
+  const path = `original/${base}`;
+
   const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file, {
     cacheControl: "3600",
     upsert: false,
   });
   if (upErr) throw upErr;
 
+  let thumbPath = null;
+  try {
+    const thumbBlob = await makeThumbnail(file);
+    if (thumbBlob) {
+      const candidate = `thumbs/${base}.jpg`;
+      const { error: thumbErr } = await supabase.storage.from(BUCKET).upload(candidate, thumbBlob, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: "image/jpeg",
+      });
+      if (thumbErr) console.error("Thumbnail upload failed, falling back to original for display:", thumbErr);
+      else thumbPath = candidate;
+    }
+  } catch (err) {
+    console.error("Thumbnail generation failed, falling back to original for display:", err);
+  }
+
   const mediaType = file.type.startsWith("video/") ? "video" : "image";
-  const albumId = currentAlbum !== "all" && currentAlbum !== "favorites" ? currentAlbum : null;
   const { error: insErr } = await supabase.from("photos").insert({
     path,
+    thumb_path: thumbPath,
     media_type: mediaType,
-    album_id: albumId,
+    album_id: currentAlbumId,
     sort_order: Date.now(),
   });
   if (insErr) throw insErr;
@@ -771,11 +859,11 @@ function syncViewerFavoriteButton(photo) {
   viewerFavorite.querySelector("svg").setAttribute("fill", photo.is_favorite ? "currentColor" : "none");
 }
 
-function showMediaForCurrent(photo) {
+function showMediaForCurrent(photo, src) {
   if (photo.media_type === "video") {
     viewerImg.hidden = true;
     viewerVideo.hidden = false;
-    viewerVideo.src = photo.url;
+    viewerVideo.src = src;
     viewerVideo.currentTime = 0;
   } else {
     viewerVideo.pause();
@@ -783,6 +871,28 @@ function showMediaForCurrent(photo) {
     viewerVideo.load();
     viewerVideo.hidden = true;
     viewerImg.hidden = false;
+  }
+}
+
+// Fetches the full-resolution original for exactly one photo, only once it's
+// actually open in the viewer — then swaps it in seamlessly (the browser
+// keeps showing the thumbnail until the original finishes decoding, so
+// there's no flash). Videos skip this: there's no separate video original
+// to fetch, they already stream the single stored file on demand.
+async function upgradeToOriginal(photo, forIndex) {
+  if (photo.media_type === "video") return;
+  if (!photo.originalUrl) {
+    try {
+      const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(photo.path, 3600);
+      if (error) throw error;
+      photo.originalUrl = data.signedUrl;
+    } catch (err) {
+      console.error("Couldn't load full-resolution image:", err);
+      return; // thumbnail stays displayed — lower quality, but not broken
+    }
+  }
+  if (viewerIndex === forIndex && visiblePhotos[viewerIndex]?.id === photo.id) {
+    viewerImg.src = photo.originalUrl;
   }
 }
 
@@ -795,7 +905,7 @@ function openViewer(i, originMediaEl) {
 
   if (photo.media_type === "video") {
     // Videos skip the FLIP zoom-from-thumbnail — native controls take over instead.
-    showMediaForCurrent(photo);
+    showMediaForCurrent(photo, photo.url);
     viewer.hidden = false;
     viewer.classList.remove("controls-visible");
     requestAnimationFrame(() => viewer.classList.add("show"));
@@ -807,8 +917,8 @@ function openViewer(i, originMediaEl) {
   viewerImg.classList.remove("loaded", "spring");
   viewerImg.style.transition = "none";
   viewerImg.style.transform = "none";
-  showMediaForCurrent(photo);
-  viewerImg.src = photo.url;
+  showMediaForCurrent(photo, photo.url);
+  viewerImg.src = photo.url; // thumbnail shows instantly — original fetched below
 
   viewer.hidden = false;
   viewer.classList.remove("controls-visible");
@@ -839,6 +949,8 @@ function openViewer(i, originMediaEl) {
 
   if (viewerImg.complete && viewerImg.naturalWidth) runEntrance();
   else viewerImg.addEventListener("load", runEntrance, { once: true });
+
+  upgradeToOriginal(photo, i);
 }
 
 function closeViewer() {
@@ -884,16 +996,18 @@ function goTo(newIndex) {
   syncViewerFavoriteButton(photo);
 
   if (photo.media_type === "video") {
-    showMediaForCurrent(photo);
+    showMediaForCurrent(photo, photo.url);
     return;
   }
 
   viewerImg.classList.remove("loaded");
   viewerImg.style.transition = "";
   viewerImg.style.transform = "";
-  showMediaForCurrent(photo);
+  showMediaForCurrent(photo, photo.url);
   viewerImg.src = photo.url;
   viewerImg.addEventListener("load", () => viewerImg.classList.add("loaded"), { once: true });
+
+  upgradeToOriginal(photo, viewerIndex);
 }
 
 function toggleControls() {
@@ -932,29 +1046,31 @@ document.addEventListener("keydown", (e) => {
 viewerFavorite.addEventListener("click", async () => {
   const photo = visiblePhotos[viewerIndex];
   if (!photo) return;
-  const tile = grid.querySelector(`.tile[data-id="${CSS.escape(String(photo.id))}"]`);
-  const star = tile ? tile.querySelector(".tile__star") : null;
-  const willBeFavorite = !photo.is_favorite;
-  if (tile && star) {
-    await toggleFavorite(photo.id, tile, star);
-  } else {
-    // Photo isn't in the current grid (e.g. filtered out) — update directly.
-    const next = !photo.is_favorite;
-    try {
-      const { error } = await supabase.from("photos").update({ is_favorite: next }).eq("id", photo.id);
-      if (error) throw error;
-      photo.is_favorite = next;
-      const cached = photos.find((x) => x.id === photo.id);
-      if (cached) cached.is_favorite = next;
-    } catch (err) {
-      console.error("Favorite toggle failed:", err);
-    }
+  const next = !photo.is_favorite;
+  try {
+    const { error } = await supabase.from("photos").update({ is_favorite: next }).eq("id", photo.id);
+    if (error) throw error;
+    photo.is_favorite = next;
+  } catch (err) {
+    console.error("Favorite toggle failed:", err);
+    return;
   }
+
   syncViewerFavoriteButton(photo);
-  if (willBeFavorite) {
-    viewerFavorite.classList.remove("bloom");
-    void viewerFavorite.offsetWidth;
-    viewerFavorite.classList.add("bloom");
+  viewerFavorite.classList.remove("bloom");
+  void viewerFavorite.offsetWidth;
+  if (next) viewerFavorite.classList.add("bloom");
+
+  const tile = grid.querySelector(`.tile[data-id="${CSS.escape(String(photo.id))}"]`);
+  if (tile) tile.classList.toggle("is-favorite", next);
+
+  // Un-favoriting while inside the Favorites view should drop it immediately.
+  if (currentView === "favorites" && !next) {
+    visiblePhotos = visiblePhotos.filter((p) => p.id !== photo.id);
+    renderGrid();
+    syncView();
+    if (!visiblePhotos.length) closeViewer();
+    else goTo(Math.min(viewerIndex, visiblePhotos.length - 1));
   }
 });
 
@@ -962,7 +1078,14 @@ viewerDownload.addEventListener("click", async () => {
   const photo = visiblePhotos[viewerIndex];
   if (!photo) return;
   try {
-    const res = await fetch(photo.url);
+    let url = photo.originalUrl;
+    if (!url) {
+      const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(photo.path, 3600);
+      if (error) throw error;
+      url = data.signedUrl;
+      photo.originalUrl = url;
+    }
+    const res = await fetch(url);
     const blob = await res.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -981,10 +1104,11 @@ viewerDelete.addEventListener("click", async () => {
   const p = visiblePhotos[viewerIndex];
   if (!p || !confirm("Delete this item?")) return;
   try {
-    await supabase.storage.from(BUCKET).remove([p.path]);
+    const filesToRemove = [p.path, p.thumb_path].filter(Boolean);
+    await supabase.storage.from(BUCKET).remove(filesToRemove);
     await supabase.from("photos").delete().eq("id", p.id);
     closeViewer();
-    await loadGallery();
+    await reloadCurrentView();
   } catch (err) {
     console.error("Delete failed:", err);
     alert("Couldn't delete that item.");
