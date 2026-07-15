@@ -69,7 +69,10 @@ const albumsGrid = document.getElementById("albumsGrid");
 const albumSubbar = document.getElementById("albumSubbar");
 const albumSubbarName = document.getElementById("albumSubbarName");
 const albumBackBtn = document.getElementById("albumBackBtn");
+const albumRenameBtn = document.getElementById("albumRenameBtn");
+const albumDeleteBtn = document.getElementById("albumDeleteBtn");
 const addMediaBtn = document.getElementById("addMediaBtn");
+const toastHost = document.getElementById("toastHost");
 const sheet = document.getElementById("sheet");
 const sheetBackdrop = document.getElementById("sheetBackdrop");
 const sheetTitle = document.getElementById("sheetTitle");
@@ -77,6 +80,18 @@ const sheetList = document.getElementById("sheetList");
 const newAlbumForm = document.getElementById("newAlbumForm");
 const newAlbumName = document.getElementById("newAlbumName");
 const sheetCancel = document.getElementById("sheetCancel");
+
+// ---- Toast notifications: non-blocking feedback for CRUD errors/success ---
+function toast(message, kind = "error", duration = 3200) {
+  const el = document.createElement("div");
+  el.className = `toast toast--${kind}`;
+  el.textContent = message;
+  toastHost.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("toast--leaving");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+  }, duration);
+}
 
 // ---- Gate state --------------------------------------------------------
 let stageIndex = 0;
@@ -328,14 +343,24 @@ function reloadCurrentView() {
   return loadAlbumsList();
 }
 
+// Request tokens guard against race conditions: if the user taps between
+// albums quickly, an older/slower request resolving after a newer one must
+// not be allowed to overwrite the screen with stale data.
+let albumsListToken = 0;
+let albumContentsToken = 0;
+let favoritesToken = 0;
+
 // ---- Startup: album list + one cheap cover+count query per album ----------
 async function loadAlbumsList() {
+  const myToken = ++albumsListToken;
   const { data: albumRows, error } = await supabase
     .from("albums").select("id, name").order("created_at", { ascending: true });
+  if (myToken !== albumsListToken) return; // a newer request has already landed
 
   if (error) {
     console.error("Album list load error:", error);
     showAlbumsError("Can't load albums — check Supabase table policies (see README).");
+    toast("Couldn't load albums. Check your connection and try again.");
     return;
   }
 
@@ -367,11 +392,48 @@ async function loadAlbumsList() {
     }
   }));
 
+  if (myToken !== albumsListToken) return;
   if (currentView === "albums") renderAlbumsScreen();
+}
+
+// Refreshes exactly one album's cover + count in place — used after any
+// upload/delete/move so album cards never show stale data, without needing
+// a full page reload or even being on the Albums screen when it happens.
+async function refreshAlbumMeta(albumId) {
+  const a = albums.find((x) => x.id === albumId);
+  if (!a) return;
+  try {
+    const { data, count, error } = await supabase
+      .from("photos")
+      .select("id, path, thumb_path", { count: "exact" })
+      .eq("album_id", albumId)
+      .order("sort_order", { ascending: false })
+      .limit(1);
+    if (error) throw error;
+
+    a.count = count || 0;
+    const row = data?.[0];
+    if (row) {
+      const key = row.thumb_path || row.path;
+      const { data: signed, error: signErr } = await supabase.storage.from(BUCKET).createSignedUrl(key, 3600);
+      a.coverUrl = signErr ? a.coverUrl : signed.signedUrl;
+    } else {
+      a.coverUrl = null;
+    }
+  } catch (err) {
+    console.error(`Couldn't refresh album "${a.name}":`, err);
+  }
+  if (currentView === "albums") renderAlbumsScreen();
+}
+
+async function refreshAlbumsMeta(albumIds) {
+  const unique = [...new Set(albumIds.filter(Boolean))];
+  await Promise.all(unique.map((id) => refreshAlbumMeta(id)));
 }
 
 // ---- Opening an album: fetch that album's rows + thumbnail URLs only -----
 async function loadAlbumContents(albumId) {
+  const myToken = ++albumContentsToken;
   if (!grid.children.length) renderSkeleton();
 
   const { data: rows, error } = await supabase
@@ -379,19 +441,23 @@ async function loadAlbumContents(albumId) {
     .select("id, path, thumb_path, album_id, is_favorite, media_type, created_at, sort_order")
     .eq("album_id", albumId)
     .order("sort_order", { ascending: false });
+  if (myToken !== albumContentsToken) return;
 
   if (error) {
     console.error("Album contents load error:", error);
     showVaultError("Can't load this album — check Supabase table policies (see README).");
+    toast("Couldn't load this album. Check your connection and try again.");
     return;
   }
   if (!rows.length) { visiblePhotos = []; renderGrid(); syncView(); return; }
 
   const thumbKeys = rows.map((r) => r.thumb_path || r.path);
   const { data: signed, error: signErr } = await supabase.storage.from(BUCKET).createSignedUrls(thumbKeys, 3600);
+  if (myToken !== albumContentsToken) return;
   if (signErr) {
     console.error("Signed URL error:", signErr);
     showVaultError("Can't load thumbnails — check Supabase storage policies (see README).");
+    toast("Couldn't load thumbnails. Check your connection and try again.");
     return;
   }
 
@@ -402,6 +468,7 @@ async function loadAlbumContents(albumId) {
 
 // ---- Favorites: metadata + thumbnails for favorited items only -----------
 async function loadFavorites() {
+  const myToken = ++favoritesToken;
   if (!grid.children.length) renderSkeleton();
 
   const { data: rows, error } = await supabase
@@ -409,19 +476,23 @@ async function loadFavorites() {
     .select("id, path, thumb_path, album_id, is_favorite, media_type, created_at, sort_order")
     .eq("is_favorite", true)
     .order("sort_order", { ascending: false });
+  if (myToken !== favoritesToken) return;
 
   if (error) {
     console.error("Favorites load error:", error);
     showVaultError("Can't load favorites — check Supabase table policies (see README).");
+    toast("Couldn't load favorites. Check your connection and try again.");
     return;
   }
   if (!rows.length) { visiblePhotos = []; renderGrid(); syncView(); return; }
 
   const thumbKeys = rows.map((r) => r.thumb_path || r.path);
   const { data: signed, error: signErr } = await supabase.storage.from(BUCKET).createSignedUrls(thumbKeys, 3600);
+  if (myToken !== favoritesToken) return;
   if (signErr) {
     console.error("Signed URL error:", signErr);
     showVaultError("Can't load thumbnails — check Supabase storage policies (see README).");
+    toast("Couldn't load thumbnails. Check your connection and try again.");
     return;
   }
 
@@ -510,8 +581,18 @@ function openAlbumSheet(mode) {
   sheetMode = mode;
   sheet.hidden = false;
   newAlbumForm.hidden = false;
-  newAlbumName.value = "";
   setTimeout(() => newAlbumName.focus(), 50);
+
+  if (mode === "rename") {
+    const a = albums.find((x) => x.id === currentAlbumId);
+    sheetTitle.textContent = "Rename album";
+    sheetList.hidden = true;
+    newAlbumName.value = a ? a.name : "";
+    newAlbumForm.querySelector("button").textContent = "Save";
+    return;
+  }
+
+  newAlbumName.value = "";
 
   if (mode === "create") {
     sheetTitle.textContent = "New album";
@@ -546,6 +627,27 @@ newAlbumForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = newAlbumName.value.trim();
   if (!name) return;
+
+  if (sheetMode === "rename") {
+    const a = albums.find((x) => x.id === currentAlbumId);
+    if (!a) { closeSheet(); return; }
+    const previousName = a.name;
+    a.name = name; // optimistic — instant UI update
+    albumSubbarName.textContent = name;
+    closeSheet();
+    try {
+      const { error } = await supabase.from("albums").update({ name }).eq("id", a.id);
+      if (error) throw error;
+      toast("Album renamed.", "success");
+    } catch (err) {
+      console.error("Rename failed:", err);
+      a.name = previousName; // rollback on failure
+      albumSubbarName.textContent = previousName;
+      toast("Couldn't rename that album.");
+    }
+    return;
+  }
+
   try {
     const { data, error } = await supabase.from("albums").insert({ name }).select().single();
     if (error) throw error;
@@ -562,22 +664,79 @@ newAlbumForm.addEventListener("submit", async (e) => {
     }
   } catch (err) {
     console.error("Create album failed:", err);
-    alert("Couldn't create that album.");
+    toast("Couldn't create that album.");
+  }
+});
+
+albumRenameBtn.addEventListener("click", () => {
+  if (!currentAlbumId) return;
+  openAlbumSheet("rename");
+});
+
+// Deleting an album never deletes its photos — they're moved to a catch-all
+// "Unsorted" album first, so nothing is ever silently lost or orphaned.
+async function ensureUnsortedAlbum() {
+  let a = albums.find((x) => x.name.toLowerCase() === "unsorted");
+  if (a) return a.id;
+  const { data, error } = await supabase.from("albums").insert({ name: "Unsorted" }).select().single();
+  if (error) throw error;
+  a = { id: data.id, name: data.name, count: 0, coverUrl: null };
+  albums.push(a);
+  return a.id;
+}
+
+albumDeleteBtn.addEventListener("click", async () => {
+  if (!currentAlbumId) return;
+  const a = albums.find((x) => x.id === currentAlbumId);
+  if (!a) return;
+
+  if (a.name.toLowerCase() === "unsorted") {
+    toast("The Unsorted album can't be deleted — it's where photos land if their album is ever removed.");
+    return;
+  }
+
+  if (!confirm(`Delete "${a.name}"? Its photos will be moved to Unsorted, not deleted.`)) return;
+
+  try {
+    const unsortedId = await ensureUnsortedAlbum();
+    const { error: moveErr } = await supabase.from("photos").update({ album_id: unsortedId }).eq("album_id", currentAlbumId);
+    if (moveErr) throw moveErr;
+
+    const { error: delErr } = await supabase.from("albums").delete().eq("id", currentAlbumId);
+    if (delErr) throw delErr;
+
+    albums = albums.filter((x) => x.id !== currentAlbumId);
+    await refreshAlbumMeta(unsortedId);
+
+    currentView = "albums";
+    currentAlbumId = null;
+    syncView();
+    renderAlbumsScreen();
+    toast(`"${a.name}" deleted. Its photos are in Unsorted.`, "success");
+  } catch (err) {
+    console.error("Album delete failed:", err);
+    toast("Couldn't delete that album.");
   }
 });
 
 async function moveSelectedTo(albumId) {
   if (!selectedIds.size) return;
   const ids = [...selectedIds];
+  // Selection can span multiple albums (e.g. moving items while browsing
+  // Favorites), so every source album's card needs refreshing too, not
+  // just the destination.
+  const sourceAlbumIds = visiblePhotos.filter((p) => ids.includes(p.id)).map((p) => p.album_id);
   try {
     const { error } = await supabase.from("photos").update({ album_id: albumId }).in("id", ids);
     if (error) throw error;
     closeSheet();
     exitSelectionMode();
     await reloadCurrentView();
+    await refreshAlbumsMeta([...sourceAlbumIds, albumId]);
+    toast(`Moved ${ids.length} item${ids.length === 1 ? "" : "s"}.`, "success");
   } catch (err) {
     console.error("Move failed:", err);
-    alert("Couldn't move the selected photos.");
+    toast("Couldn't move the selected photos.");
   }
 }
 
@@ -727,14 +886,17 @@ selectionDelete.addEventListener("click", async () => {
   const targets = visiblePhotos.filter((p) => selectedIds.has(p.id));
   if (!confirm(`Delete ${targets.length} photo(s)?`)) return;
   const filesToRemove = targets.flatMap((p) => [p.path, p.thumb_path].filter(Boolean));
+  const affectedAlbumIds = targets.map((p) => p.album_id);
   try {
     await supabase.storage.from(BUCKET).remove(filesToRemove);
     await supabase.from("photos").delete().in("id", targets.map((p) => p.id));
     exitSelectionMode();
     await reloadCurrentView();
+    await refreshAlbumsMeta(affectedAlbumIds);
+    toast(`Deleted ${targets.length} item${targets.length === 1 ? "" : "s"}.`, "success");
   } catch (err) {
     console.error("Bulk delete failed:", err);
-    alert("Couldn't delete the selected photos.");
+    toast("Couldn't delete the selected photos.");
   }
 });
 
@@ -745,23 +907,27 @@ uploadInput.addEventListener("change", async (e) => {
   if (!files.length) return;
 
   if (currentView !== "album" || !currentAlbumId) {
-    alert("Open an album first, then add photos or videos to it.");
+    toast("Open an album first, then add photos or videos to it.");
     return;
   }
 
   uploadBar.hidden = false;
+  let uploadedCount = 0;
   for (let i = 0; i < files.length; i++) {
     uploadBarFill.style.width = `${Math.round((i / files.length) * 100)}%`;
     try {
       await uploadOne(files[i]);
+      uploadedCount++;
     } catch (err) {
       console.error("Upload failed:", err);
-      alert("Couldn't save that file — check Supabase policies (see README).");
+      toast("Couldn't save that file — check Supabase policies (see README).");
       break;
     }
   }
   uploadBarFill.style.width = "100%";
   await loadAlbumContents(currentAlbumId);
+  await refreshAlbumMeta(currentAlbumId);
+  if (uploadedCount) toast(`Added ${uploadedCount} item${uploadedCount === 1 ? "" : "s"}.`, "success");
   setTimeout(() => (uploadBar.hidden = true), 250);
 });
 
@@ -1096,7 +1262,7 @@ viewerDownload.addEventListener("click", async () => {
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   } catch (err) {
     console.error("Download failed:", err);
-    alert("Couldn't download that file.");
+    toast("Couldn't download that file.");
   }
 });
 
@@ -1109,9 +1275,11 @@ viewerDelete.addEventListener("click", async () => {
     await supabase.from("photos").delete().eq("id", p.id);
     closeViewer();
     await reloadCurrentView();
+    await refreshAlbumMeta(p.album_id);
+    toast("Item deleted.", "success");
   } catch (err) {
     console.error("Delete failed:", err);
-    alert("Couldn't delete that item.");
+    toast("Couldn't delete that item.");
   }
 });
 
